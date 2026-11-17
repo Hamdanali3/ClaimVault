@@ -1,0 +1,10 @@
+{
+  "name": "ClaimVault Ledger",
+  "short_name": "ClaimVault",
+  "description": "Zero-friction warranty, return-window, and subscription proof ledger.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FAF9F6",
+  "theme_color": "#141413",
+  "icons": []
+}

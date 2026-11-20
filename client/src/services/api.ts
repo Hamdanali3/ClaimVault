@@ -244,3 +244,54 @@ export async function inviteHouseholdMemberApi(email: string, role: 'EDITOR' | '
   const { data } = await api.post('/household/members', { email, role });
   return data;
 }
+
+export async function removeHouseholdMemberApi(userId: string): Promise<void> {
+  await api.delete(`/household/members/${encodeURIComponent(userId)}`);
+}
+
+export async function logoutAccount(): Promise<void> {
+  const { refreshToken } = getStoredTokens();
+  try {
+    if (refreshToken) {
+      await api.post('/auth/logout', { refreshToken });
+    }
+  } catch {
+    // Always clear local session even if server logout call fails
+  } finally {
+    setStoredTokens(null, null);
+  }
+}
+
+export async function updateMerchantProfileApi(
+  id: string,
+  payload: {
+    displayName?: string;
+    defaultReturnWindowDays?: number;
+    defaultWarrantyMonths?: number;
+    defaultCurrency?: string;
+    defaultBillingCycle?: 'NONE' | 'MONTHLY' | 'YEARLY';
+  },
+): Promise<MerchantProfileDTO> {
+  const { data } = await api.patch<{ merchantProfile: MerchantProfileDTO }>(
+    `/merchants/${encodeURIComponent(id)}`,
+    payload,
+  );
+  return data.merchantProfile;
+}
+
+export async function deleteMerchantProfileApi(id: string): Promise<void> {
+  await api.delete(`/merchants/${encodeURIComponent(id)}`);
+}
+
+export interface AuditLogEntryDTO {
+  _id: string;
+  eventType: string;
+  vaultItemId?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+}
+
+export async function fetchAuditLogsApi(): Promise<AuditLogEntryDTO[]> {
+  const { data } = await api.get<{ logs: AuditLogEntryDTO[] }>('/vault/audit-logs');
+  return data.logs ?? [];
+}

@@ -39,6 +39,39 @@ export function errorHandler(
     return;
   }
 
+  // Mongoose invalid ObjectId / CastError
+  if (err && typeof err === 'object' && (err as { name?: string }).name === 'CastError') {
+    res.status(400).json({
+      error: {
+        code: 'INVALID_ID',
+        message: 'Invalid resource identifier format',
+      },
+    });
+    return;
+  }
+
+  // MongoDB duplicate key conflict
+  if (err && typeof err === 'object' && (err as { code?: number }).code === 11000) {
+    res.status(409).json({
+      error: {
+        code: 'CONFLICT',
+        message: 'A record with these unique details already exists',
+      },
+    });
+    return;
+  }
+
+  // Multer upload limit errors
+  if (err && typeof err === 'object' && (err as { code?: string }).code === 'LIMIT_FILE_SIZE') {
+    res.status(413).json({
+      error: {
+        code: 'FILE_TOO_LARGE',
+        message: 'Uploaded receipt file exceeds the maximum allowed size.',
+      },
+    });
+    return;
+  }
+
   const message = err instanceof Error ? err.message : 'Internal server error';
   const status = (err as { status?: number })?.status ?? 500;
   if (status >= 500) {

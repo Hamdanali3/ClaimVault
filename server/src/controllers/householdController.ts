@@ -97,3 +97,31 @@ export async function addHouseholdMember(
     next(err);
   }
 }
+
+export async function removeHouseholdMember(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    if (!req.auth) throw new AppError('Unauthorized', 401, 'UNAUTHORIZED');
+    const targetUserId = String(req.params.userId ?? '').trim();
+    if (!targetUserId) throw new AppError('Member userId is required', 400, 'INVALID_ID');
+
+    const household = await HouseholdModel.findById(req.auth.householdId);
+    if (!household) throw new AppError('Household not found', 404, 'NOT_FOUND');
+
+    const member = household.members.find((m) => m.userId.toString() === targetUserId);
+    if (!member) throw new AppError('Member not found in household', 404, 'NOT_FOUND');
+    if (member.role === 'OWNER') {
+      throw new AppError('Cannot remove the household owner', 400, 'CANNOT_REMOVE_OWNER');
+    }
+
+    household.members = household.members.filter((m) => m.userId.toString() !== targetUserId);
+    await household.save();
+
+    res.json({ ok: true, removedUserId: targetUserId });
+  } catch (err) {
+    next(err);
+  }
+}

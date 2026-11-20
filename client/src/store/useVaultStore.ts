@@ -3,11 +3,13 @@ import type {
   ConfirmVaultItemInput,
   DashboardResponseDTO,
   IngestExtractResponseDTO,
+  MerchantProfileDTO,
   ResolveVaultItemInput,
   VaultItemDTO,
 } from '@claimvault/shared';
 import {
   confirmVaultItemApi,
+  deleteMerchantProfileApi,
   deleteVaultItemApi,
   fetchCurrentSession,
   fetchDashboard,
@@ -15,6 +17,7 @@ import {
   resetDemoWorkspaceApi,
   resolveVaultItemApi,
   restoreVaultItemApi,
+  updateMerchantProfileApi,
   type AuthSessionUser,
 } from '../services/api';
 import {
@@ -38,6 +41,7 @@ interface VaultStoreState {
   activeTab: LedgerTab;
   isLoading: boolean;
   isOfflineFallback: boolean;
+  apiError: string | null;
   ingestionStage: IngestionStage;
   isIngesting: boolean;
   captureStartedAtMs: number | null;
@@ -55,6 +59,7 @@ interface VaultStoreState {
   setGlobalDragActive: (active: boolean) => void;
   clearPendingReview: () => void;
   dismissVelocityBanner: () => void;
+  clearSessionTransientState: () => void;
 
   loadDashboard: () => Promise<void>;
   processIngestion: (params: {
@@ -67,8 +72,17 @@ interface VaultStoreState {
     id: string,
     payload: ResolveVaultItemInput,
   ) => Promise<VaultItemDTO | null>;
-  optimisticRestoreItem: (id: string) => Promise<void>;
-  optimisticDeleteItem: (id: string) => Promise<void>;
+  optimisticRestoreItem: (id: string) => Promise<boolean>;
+  optimisticDeleteItem: (id: string) => Promise<boolean>;
+  updateMerchantPolicy: (
+    id: string,
+    payload: {
+      defaultReturnWindowDays?: number;
+      defaultWarrantyMonths?: number;
+      defaultCurrency?: string;
+    },
+  ) => Promise<MerchantProfileDTO>;
+  deleteMerchantPolicy: (id: string) => Promise<void>;
   resetDemo: () => Promise<void>;
 }
 
@@ -93,12 +107,26 @@ export function findVaultItemInState(
   return getAllKnownItems(dash).find((i) => i._id === id) ?? null;
 }
 
+function extractErrorMessage(err: unknown, fallback: string): string {
+  const axiosErr = err as {
+    response?: { status?: number; data?: { error?: { message?: string } } };
+    message?: string;
+  };
+  const serverMsg = axiosErr?.response?.data?.error?.message;
+  if (serverMsg && serverMsg !== 'Internal server error') return serverMsg;
+  if (axiosErr?.response?.status && axiosErr.response.status >= 500) {
+    return 'ClaimVault API is currently unable to reach its database. Please retry in a moment.';
+  }
+  return axiosErr?.message || fallback;
+}
+
 export const useVaultStore = create<VaultStoreState>((set, get) => ({
   dashboard: null,
   sessionUser: null,
   activeTab: 'ACTION_NEEDED',
   isLoading: true,
   isOfflineFallback: false,
+  apiError: null,
   ingestionStage: 'IDLE',
   isIngesting: false,
   captureStartedAtMs: null,
@@ -116,6 +144,13 @@ export const useVaultStore = create<VaultStoreState>((set, get) => ({
   setGlobalDragActive: (active) => set({ globalDragActive: active }),
   clearPendingReview: () => set({ pendingReview: null, captureStartedAtMs: null }),
   dismissVelocityBanner: () => set({ velocityBanner: null }),
+  clearSessionTransientState: () =>
+    set({
+      velocityBanner: null,
+      pendingReview: null,
+      selectedItemId: null,
+      captureStartedAtMs: null,
+    }),
 
   loadDashboard: async () => {
     try {
@@ -128,14 +163,17 @@ export const useVaultStore = create<VaultStoreState>((set, get) => ({
         sessionUser: session?.user ?? get().sessionUser,
         isLoading: false,
         isOfflineFallback: false,
+        apiError: null,
       });
       void saveDashboardOfflineSnapshot(dash);
-    } catch {
+    } catch (err) {
       const cached = await loadDashboardOfflineSnapshot();
+      const hasCached = Boolean(cached ?? get().dashboard);
       set({
         dashboard: cached ?? get().dashboard,
         isLoading: false,
-        isOfflineFallback: true,
+        isOfflineFallback: hasCached,
+        apiError: extractErrorMessage(err, 'Unable to connect to ClaimVault API.'),
       });
     }
   },
@@ -148,16 +186,13 @@ export const useVaultStore = create<VaultStoreState>((set, get) => ({
       captureStartedAtMs: startedAt,
     });
 
+    // Advance from HASHING -> READING while waiting; never show DATES_VERIFIED before API confirms
     const stageTimer1 = window.setTimeout(() => {
       if (get().isIngesting) set({ ingestionStage: 'READING' });
-    }, 180);
-    const stageTimer2 = window.setTimeout(() => {
-      if (get().isIngesting) set({ ingestionStage: 'DATES_VERIFIED' });
-    }, 450);
+    }, 240);
 
     try {
-      const simulatedSeconds =
-        params.demoType === 'VISIT_2' ? 18 : params.demoType === 'VISIT_1' ? undefined : undefined;
+      const simulatedSeconds = params.demoType === 'VISIT_2' ? 18 : undefined;
       const result = await ingestReceipt({
         file: params.file,
         rawText: params.rawText,
@@ -165,12 +200,17 @@ export const useVaultStore = create<VaultStoreState>((set, get) => ({
       });
 
       window.clearTimeout(stageTimer1);
-      window.clearTimeout(stageTimer2);
 
       set({
         ingestionStage: 'DATES_VERIFIED',
         isIngesting: false,
       });
+
+      window.setTimeout(() => {
+        if (!get().isIngesting && get().ingestionStage === 'DATES_VERIFIED') {
+          set({ ingestionStage: 'IDLE' });
+        }
+      }, 1500);
 
       if (result.duplicateDetected) {
         set({ selectedItemId: result.item._id });
@@ -178,7 +218,6 @@ export const useVaultStore = create<VaultStoreState>((set, get) => ({
       }
 
       if (result.autoCommitted) {
-        // Optimistically prepend item & refresh authoritative $facet dashboard
         const prev = get().dashboard;
         if (prev) {
           set({
@@ -207,7 +246,6 @@ export const useVaultStore = create<VaultStoreState>((set, get) => ({
       return result;
     } catch (err) {
       window.clearTimeout(stageTimer1);
-      window.clearTimeout(stageTimer2);
       set({ isIngesting: false, ingestionStage: 'IDLE' });
       throw err;
     }
@@ -233,7 +271,6 @@ export const useVaultStore = create<VaultStoreState>((set, get) => ({
     const prevDash = get().dashboard;
     const targetItem = findVaultItemInState(prevDash, id);
 
-    // Optimistic <16ms mutation
     if (prevDash && targetItem) {
       const recovered =
         payload.moneySavedOrRecovered !== undefined
@@ -278,8 +315,13 @@ export const useVaultStore = create<VaultStoreState>((set, get) => ({
   },
 
   optimisticRestoreItem: async (id) => {
-    await restoreVaultItemApi(id);
-    await get().loadDashboard();
+    try {
+      await restoreVaultItemApi(id);
+      await get().loadDashboard();
+      return true;
+    } catch {
+      return false;
+    }
   },
 
   optimisticDeleteItem: async (id) => {
@@ -298,8 +340,37 @@ export const useVaultStore = create<VaultStoreState>((set, get) => ({
     try {
       await deleteVaultItemApi(id);
       void get().loadDashboard();
+      return true;
     } catch {
       if (prevDash) set({ dashboard: prevDash });
+      return false;
+    }
+  },
+
+  updateMerchantPolicy: async (id, payload) => {
+    const updated = await updateMerchantProfileApi(id, payload);
+    const prevDash = get().dashboard;
+    if (prevDash) {
+      set({
+        dashboard: {
+          ...prevDash,
+          merchantProfiles: prevDash.merchantProfiles.map((m) => (m._id === id ? updated : m)),
+        },
+      });
+    }
+    return updated;
+  },
+
+  deleteMerchantPolicy: async (id) => {
+    await deleteMerchantProfileApi(id);
+    const prevDash = get().dashboard;
+    if (prevDash) {
+      set({
+        dashboard: {
+          ...prevDash,
+          merchantProfiles: prevDash.merchantProfiles.filter((m) => m._id !== id),
+        },
+      });
     }
   },
 

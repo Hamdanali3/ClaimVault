@@ -358,22 +358,30 @@ function parseDateFromText(text: string, fallbackISO: string): {
     }
   }
 
+  const fallbackDateLineIdx = lines.findIndex((l) =>
+    /^(?:date|purchase\s*date|issued|bill\s*date)\b|\?{2,}/i.test(l.trim()),
+  );
   return {
     iso: fallbackISO,
     confidence: 0.62, // Low confidence triggers Eric Horvitz amber 1-tap verification!
-    matchedLineIndex: 2,
+    matchedLineIndex: fallbackDateLineIdx >= 0 ? fallbackDateLineIdx : Math.min(2, Math.max(0, lines.length - 1)),
   };
 }
 
-function lineToBox(lineIndex: number, totalLines: number, x1 = 0.07, x2 = 0.78): BoundingBox {
-  const safeTotal = Math.max(totalLines, 10);
-  const yStart = Math.min(0.84, Math.max(0.12, 0.14 + (lineIndex / safeTotal) * 0.68));
-  const yEnd = Math.min(0.94, yStart + 0.055);
+function lineToBox(lineIndex: number, totalLines: number, x1 = 0.05, x2 = 0.78): BoundingBox {
+  // Exact match to renderTextReceiptCardBuffer SVG geometry (topPad=104, lineHeight=28, minHeight=460)
+  const lineHeight = 28;
+  const topPad = 104;
+  const clampedLines = Math.min(Math.max(totalLines, 1), 28);
+  const cardHeight = Math.max(460, topPad + clampedLines * lineHeight + 70);
+  const baselineY = topPad + lineIndex * lineHeight;
+  const yStart = Math.max(0.05, Math.min(0.88, (baselineY - 19) / cardHeight));
+  const yEnd = Math.min(0.96, (baselineY + 7) / cardHeight);
   return [
-    Number(x1.toFixed(2)),
-    Number(yStart.toFixed(2)),
-    Number(x2.toFixed(2)),
-    Number(yEnd.toFixed(2)),
+    Number(x1.toFixed(3)),
+    Number(yStart.toFixed(3)),
+    Number(x2.toFixed(3)),
+    Number(yEnd.toFixed(3)),
   ];
 }
 
@@ -489,19 +497,36 @@ export function runDeterministicExtraction(
   // Extract Purchase Date
   const dateParsed = parseDateFromText(sourceText, todayISO);
 
-  // Extract Identifiers
+  // Extract Identifiers (require explicit delimiter/label so headings like "ORDER CONFIRMATION" never match)
   let orderLineIdx = 1;
   let serialLineIdx = 2;
-  const orderMatch = sourceText.match(
-    /(?:order(?:\s*(?:id|no|number|#))?|inv(?:oice)?(?:\s*#)?)\s*[:#\-]?\s*([A-Z0-9-]{4,28})/i,
-  );
-  if (orderMatch) {
-    const idx = lines.findIndex((l) => l.includes(orderMatch[1]));
-    if (idx >= 0) orderLineIdx = idx;
+  const ORDER_STOPWORDS = new Set([
+    'CONFIRMATION',
+    'SUMMARY',
+    'DETAILS',
+    'DETAIL',
+    'RECEIPT',
+    'INVOICE',
+    'TOTAL',
+    'DATE',
+    'HISTORY',
+    'STATUS',
+    'NUMBER',
+  ]);
+  let orderMatch: RegExpMatchArray | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(
+      /(?:order\s*(?:id|no\.?|number|#)\s*[:#\-]?\s*|order\s*[:#]\s*|inv(?:oice)?\s*(?:ref\.?|id|no\.?|number|#)?\s*[:#\-]\s*)([A-Z0-9][A-Z0-9-]{2,27})/i,
+    );
+    if (m && !ORDER_STOPWORDS.has(m[1].toUpperCase())) {
+      orderMatch = m;
+      orderLineIdx = i;
+      break;
+    }
   }
 
   const serialMatch = sourceText.match(
-    /(?:serial(?:\s*(?:no|number|#))?|s\/n|sn)\s*[:#\-]?\s*([A-Z0-9-]{5,32})/i,
+    /(?:serial(?:\s*(?:no\.?|number|#))?|s\/n|\bsn)\s*(?:\([^)]*\))?\s*[:#\-]\s*([A-Z0-9-]{4,32})/i,
   );
   if (serialMatch) {
     const idx = lines.findIndex((l) => l.includes(serialMatch[1]));
@@ -610,10 +635,13 @@ export async function extractStructuredReceipt(params: {
         const heuristicFallback = textToUse
           ? runDeterministicExtraction(textToUse, todayISO, params.fileNameHint)
           : null;
+        // For text-derived receipts rendered to deterministic SVG cards, exact SVG line geometry beats LLM-guessed boxes
         const mergedBoxes =
-          Object.keys(geminiResult.extraction.boundingBoxes).length > 0
-            ? geminiResult.extraction.boundingBoxes
-            : (heuristicFallback?.boundingBoxes ?? {});
+          textToUse.length >= 20 && heuristicFallback
+            ? { ...geminiResult.extraction.boundingBoxes, ...heuristicFallback.boundingBoxes }
+            : Object.keys(geminiResult.extraction.boundingBoxes).length > 0
+              ? geminiResult.extraction.boundingBoxes
+              : (heuristicFallback?.boundingBoxes ?? {});
         return {
           extraction: {
             ...geminiResult.extraction,
@@ -643,8 +671,20 @@ export async function extractStructuredReceipt(params: {
         todayISO,
       });
       if (openAiResult) {
+        const heuristicFallback = textToUse
+          ? runDeterministicExtraction(textToUse, todayISO, params.fileNameHint)
+          : null;
+        const mergedBoxes =
+          textToUse.length >= 20 && heuristicFallback
+            ? { ...openAiResult.boundingBoxes, ...heuristicFallback.boundingBoxes }
+            : Object.keys(openAiResult.boundingBoxes).length > 0
+              ? openAiResult.boundingBoxes
+              : (heuristicFallback?.boundingBoxes ?? {});
         return {
-          extraction: openAiResult,
+          extraction: {
+            ...openAiResult,
+            boundingBoxes: mergedBoxes,
+          },
           rawOcrText: textToUse || `${openAiResult.merchantName} - ${openAiResult.title}`,
           engineUsed: 'openai-gpt-4o-mini-structured',
         };

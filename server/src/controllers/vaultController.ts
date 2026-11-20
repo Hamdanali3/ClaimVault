@@ -13,7 +13,11 @@ import { AuditLogModel } from '../models/AuditLog.js';
 import { AppError } from '../middlewares/errorHandler.js';
 import { runWithOptionalTransaction } from '../config/db.js';
 import { getSystemStatus } from '../config/systemStatus.js';
-import { addDaysUTC, addMonthsUTC } from '../services/ai/policyResolver.js';
+import {
+  addDaysUTC,
+  addMonthsUTC,
+  computeNextUpcomingRenewalDate,
+} from '../services/ai/policyResolver.js';
 import {
   cancelPendingRemindersForItem,
   scheduleDeadlinesForItem,
@@ -332,16 +336,12 @@ export async function confirmVaultItem(
         item.returnWindowDays > 0 ? addDaysUTC(baseDate, item.returnWindowDays) : null;
       item.dates.warrantyExpiryDate =
         item.warrantyMonths > 0 ? addMonthsUTC(baseDate, item.warrantyMonths) : null;
-      if (item.billingCycle === 'MONTHLY') {
-        item.dates.nextRenewalDate = addMonthsUTC(baseDate, 1);
-        item.dates.cancelByDate = addDaysUTC(item.dates.nextRenewalDate, -2);
-      } else if (item.billingCycle === 'YEARLY') {
-        item.dates.nextRenewalDate = addMonthsUTC(baseDate, 12);
-        item.dates.cancelByDate = addDaysUTC(item.dates.nextRenewalDate, -3);
-      } else {
-        item.dates.nextRenewalDate = null;
-        item.dates.cancelByDate = null;
-      }
+      const { nextRenewalDate, cancelByDate } = computeNextUpcomingRenewalDate(
+        baseDate,
+        item.billingCycle,
+      );
+      item.dates.nextRenewalDate = nextRenewalDate;
+      item.dates.cancelByDate = cancelByDate;
 
       // Mark human-confirmed fields at 1.0 confidence
       item.aiMetadata = {

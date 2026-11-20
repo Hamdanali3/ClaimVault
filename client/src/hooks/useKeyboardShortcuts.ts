@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
 
 interface ShortcutHandlers {
+  disabled?: boolean;
+  singleKeyDisabled?: boolean;
   onToggleCommandPalette: () => void;
   onNewReceiptFocus: () => void;
   onExportClaimPdf?: () => void;
@@ -8,12 +10,16 @@ interface ShortcutHandlers {
 }
 
 export function useKeyboardShortcuts({
+  disabled = false,
+  singleKeyDisabled = false,
   onToggleCommandPalette,
   onNewReceiptFocus,
   onExportClaimPdf,
   onMarkReturned,
 }: ShortcutHandlers): void {
   useEffect(() => {
+    if (disabled) return;
+
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       const isEditable =
@@ -29,7 +35,7 @@ export function useKeyboardShortcuts({
         return;
       }
 
-      if (isEditable) return;
+      if (isEditable || singleKeyDisabled || e.metaKey || e.ctrlKey || e.altKey) return;
 
       if (e.key === '/') {
         e.preventDefault();
@@ -48,5 +54,12 @@ export function useKeyboardShortcuts({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onExportClaimPdf, onMarkReturned, onNewReceiptFocus, onToggleCommandPalette]);
+  }, [
+    disabled,
+    singleKeyDisabled,
+    onExportClaimPdf,
+    onMarkReturned,
+    onNewReceiptFocus,
+    onToggleCommandPalette,
+  ]);
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Toaster, toast } from 'sonner';
-import { Upload } from 'lucide-react';
+import { Upload, AlertTriangle, RotateCcw } from 'lucide-react';
 import type {
   ConfirmVaultItemInput,
   ResolveVaultItemInput,
@@ -41,6 +41,7 @@ export function App() {
     activeTab,
     isLoading,
     isOfflineFallback,
+    apiError,
     ingestionStage,
     isIngesting,
     pendingReview,
@@ -56,12 +57,15 @@ export function App() {
     setGlobalDragActive,
     clearPendingReview,
     dismissVelocityBanner,
+    clearSessionTransientState,
     loadDashboard,
     processIngestion,
     confirmReviewItem,
     optimisticResolveItem,
     optimisticRestoreItem,
     optimisticDeleteItem,
+    updateMerchantPolicy,
+    deleteMerchantPolicy,
     resetDemo,
   } = useVaultStore();
 
@@ -78,11 +82,14 @@ export function App() {
   }, [loadDashboard, verifyToken]);
 
   const openVerifyRoute = (token: string) => {
+    // Close open item drawer before switching to public certificate view
+    setSelectedItemId(null);
     window.history.pushState({}, '', `/verify/${encodeURIComponent(token)}`);
     setVerifyToken(token);
   };
 
   const closeVerifyRoute = () => {
+    setSelectedItemId(null);
     window.history.pushState({}, '', '/');
     setVerifyToken(null);
   };
@@ -115,8 +122,10 @@ export function App() {
               action: {
                 label: 'Undo',
                 onClick: () => {
-                  void optimisticDeleteItem(res.item._id);
-                  toast('Capture undone');
+                  void optimisticDeleteItem(res.item._id).then((ok) => {
+                    if (ok) toast('Capture undone');
+                    else toast.error('Could not undo capture');
+                  });
                 },
               },
               cancel: {
@@ -127,17 +136,28 @@ export function App() {
           );
         }
       } catch (err: unknown) {
+        const axiosErr = err as {
+          response?: { status?: number; data?: { error?: { message?: string } } };
+        };
+        const serverMsg = axiosErr?.response?.data?.error?.message;
         const msg =
-          (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data
-            ?.error?.message ?? 'Could not extract receipt details.';
+          serverMsg && serverMsg !== 'Internal server error'
+            ? serverMsg
+            : axiosErr?.response?.status && axiosErr.response.status >= 500
+              ? 'ClaimVault API is currently unavailable. Could not extract receipt.'
+              : 'Could not extract receipt details.';
         toast.error(msg);
       }
     },
     [optimisticDeleteItem, processIngestion, setSelectedItemId],
   );
 
+  const anyModalOrDrawerOpen = Boolean(
+    verifyToken || authModalOpen || commandPaletteOpen || pendingReview,
+  );
+
   useGlobalClipboardPaste({
-    disabled: Boolean(verifyToken) || authModalOpen,
+    disabled: anyModalOrDrawerOpen || Boolean(selectedItemId),
     onPasteText: (text) => void runIngestionWithFeedback({ rawText: text }),
     onDropOrPasteFile: (file) => void runIngestionWithFeedback({ file }),
     onDragStateChange: setGlobalDragActive,
@@ -162,10 +182,15 @@ export function App() {
             ? 'RETURNED_REFUNDED'
             : 'WARRANTY_CLAIMED');
 
-      await optimisticResolveItem(item._id, {
+      const resolved = await optimisticResolveItem(item._id, {
         status: targetStatus,
         moneySavedOrRecovered: item.financials.amount,
       });
+
+      if (!resolved) {
+        toast.error('Could not update item status. Please retry.');
+        return;
+      }
 
       const actionDesc =
         targetStatus === 'SUBSCRIPTION_CANCELLED'
@@ -181,8 +206,10 @@ export function App() {
           action: {
             label: 'Undo',
             onClick: () => {
-              void optimisticRestoreItem(item._id);
-              toast('Restored back to active ledger');
+              void optimisticRestoreItem(item._id).then((ok) => {
+                if (ok) toast('Restored back to active ledger');
+                else toast.error('Could not restore item');
+              });
             },
           },
         },
@@ -192,6 +219,8 @@ export function App() {
   );
 
   useKeyboardShortcuts({
+    disabled: Boolean(verifyToken),
+    singleKeyDisabled: Boolean(authModalOpen || commandPaletteOpen || pendingReview),
     onToggleCommandPalette: () => setCommandPaletteOpen(!commandPaletteOpen),
     onNewReceiptFocus: () => uploadBtnRef.current?.click(),
     onExportClaimPdf: selectedItem
@@ -241,15 +270,83 @@ export function App() {
     );
   };
 
+  const handleUpdateExistingItem = async (id: string, input: ConfirmVaultItemInput) => {
+    try {
+      const saved = await confirmReviewItem(id, input);
+      toast.success(`Updated ${saved.title} and recalculated deadlines.`);
+    } catch {
+      toast.error('Could not save item changes.');
+      throw new Error('Update failed');
+    }
+  };
+
   const handleDeleteWithToast = async (item: VaultItemDTO) => {
-    await optimisticDeleteItem(item._id);
-    toast(`Removed ${item.title} from vault`);
+    const ok = await optimisticDeleteItem(item._id);
+    if (ok) toast(`Removed ${item.title} from vault`);
+    else toast.error(`Could not remove ${item.title}`);
+  };
+
+  const handleResetDemo = async () => {
+    try {
+      await resetDemo();
+      toast.success('Demo workspace restored to default 4 records');
+    } catch {
+      toast.error('Could not reset demo workspace.');
+    }
+  };
+
+  const handleAuthChanged = async () => {
+    clearSessionTransientState();
+    await loadDashboard();
+  };
+
+  const handleUpdateMerchantPolicy = async (
+    id: string,
+    payload: {
+      defaultReturnWindowDays?: number;
+      defaultWarrantyMonths?: number;
+      defaultCurrency?: string;
+    },
+  ) => {
+    try {
+      const updated = await updateMerchantPolicy(id, payload);
+      toast.success(`Updated default policy for ${updated.displayName}`);
+    } catch {
+      toast.error('Could not update merchant policy');
+    }
+  };
+
+  const handleDeleteMerchantPolicy = async (id: string, displayName: string) => {
+    try {
+      await deleteMerchantPolicy(id);
+      toast(`Removed learned policy for ${displayName}`);
+    } catch {
+      toast.error('Could not remove merchant policy');
+    }
+  };
+
+  const toasterProps = {
+    position: 'bottom-right' as const,
+    toastOptions: {
+      style: {
+        background: '#141413',
+        color: '#FAF9F6',
+        border: '1px solid #3F3E3B',
+        fontSize: '12px',
+      },
+      classNames: {
+        description: '!text-[#E6E4DD]',
+        actionButton: '!bg-[#FAF9F6] !text-[#141413] !font-semibold hover:!bg-[#E6E4DD]',
+        cancelButton:
+          '!bg-[#2A2A28] !text-[#FAF9F6] !border !border-[#52514D] !font-medium hover:!bg-[#3F3E3B]',
+      },
+    },
   };
 
   if (verifyToken) {
     return (
       <>
-        <Toaster position="bottom-right" />
+        <Toaster {...toasterProps} />
         <PublicVerifyPage token={verifyToken} onBackToVault={closeVerifyRoute} />
       </>
     );
@@ -257,17 +354,7 @@ export function App() {
 
   return (
     <div className="min-h-screen bg-[#FAF9F6] text-[#141413]">
-      <Toaster
-        position="bottom-right"
-        toastOptions={{
-          style: {
-            background: '#141413',
-            color: '#FAF9F6',
-            border: '1px solid #2A2A28',
-            fontSize: '12px',
-          },
-        }}
-      />
+      <Toaster {...toasterProps} />
 
       {/* Full-viewport drag-drop indicator */}
       {globalDragActive && (
@@ -292,18 +379,37 @@ export function App() {
         onOpenAuthModal={() => setAuthModalOpen(true)}
         onSimulateVisit1={handleSimulateVisit1}
         onSimulateVisit2={handleSimulateVisit2}
-        onResetDemo={() =>
-          void resetDemo().then(() =>
-            toast.success('Demo workspace restored to default 4 records'),
-          )
-        }
+        onResetDemo={() => void handleResetDemo()}
         isIngesting={isIngesting}
         isOfflineFallback={isOfflineFallback}
+        apiError={apiError}
         isDemoWorkspace={sessionUser?.isDemoWorkspace !== false}
         userName={sessionUser?.fullName}
       />
 
-      <main className="mx-auto max-w-6xl space-y-5 px-4 py-6 sm:px-6">
+      <main className="mx-auto max-w-6xl space-y-5 px-4 py-5 sm:px-6 sm:py-6">
+        {apiError && isOfflineFallback && (
+          <div
+            role="alert"
+            className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] px-4 py-3 text-xs text-[#92400E]"
+          >
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span>
+                Showing cached proof snapshot — live API is unreachable ({apiError})
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadDashboard()}
+              className="inline-flex min-h-[32px] items-center gap-1.5 rounded border border-[#92400E] bg-[#FFFFFF] px-2.5 text-xs font-semibold text-[#92400E] hover:bg-[#FEF3C7]"
+            >
+              <RotateCcw className="h-3 w-3" />
+              <span>Retry</span>
+            </button>
+          </div>
+        )}
+
         <GlobalDropzone
           onUploadFile={(file) => void runIngestionWithFeedback({ file })}
           onSubmitText={(text) => void runIngestionWithFeedback({ rawText: text })}
@@ -331,6 +437,8 @@ export function App() {
         ) : activeTab === 'ACTION_NEEDED' ? (
           <ActionNeededView
             urgentItems={dashboard?.urgentItems ?? []}
+            apiError={apiError && !isOfflineFallback ? apiError : null}
+            onRetryConnection={() => void loadDashboard()}
             onInspect={(item) => setSelectedItemId(item._id)}
             onDownloadClaimPdf={(item) => handleDownloadClaimPdf(item)}
             onResolveOutcome={(item) => void handleResolveWithUndo(item)}
@@ -341,6 +449,8 @@ export function App() {
             items={dashboard?.allActiveItems ?? []}
             merchantProfiles={dashboard?.merchantProfiles ?? []}
             onSelectItem={(item) => setSelectedItemId(item._id)}
+            onUpdateMerchantPolicy={handleUpdateMerchantPolicy}
+            onDeleteMerchantPolicy={handleDeleteMerchantPolicy}
           />
         ) : (
           <SavedMoneyAnalyticsView
@@ -352,9 +462,10 @@ export function App() {
             }
             onSelectItem={(item) => setSelectedItemId(item._id)}
             onRestoreItem={(item) =>
-              void optimisticRestoreItem(item._id).then(() =>
-                toast('Restored item to active vault'),
-              )
+              void optimisticRestoreItem(item._id).then((ok) => {
+                if (ok) toast('Restored item to active vault');
+                else toast.error('Could not restore item');
+              })
             }
             onDownloadClaimPdf={(item) => handleDownloadClaimPdf(item)}
           />
@@ -373,6 +484,7 @@ export function App() {
         onClose={() => setSelectedItemId(null)}
         onDownloadClaimPdf={handleDownloadClaimPdf}
         onResolveOutcome={(item, status) => void handleResolveWithUndo(item, status)}
+        onUpdateItem={handleUpdateExistingItem}
         onDelete={(item) => void handleDeleteWithToast(item)}
         onOpenVerifyRoute={openVerifyRoute}
       />
@@ -397,7 +509,8 @@ export function App() {
         onClose={() => setAuthModalOpen(false)}
         sessionUser={sessionUser}
         systemStatus={dashboard?.systemStatus}
-        onAuthChanged={loadDashboard}
+        apiError={apiError}
+        onAuthChanged={handleAuthChanged}
       />
     </div>
   );

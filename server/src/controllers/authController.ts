@@ -59,22 +59,28 @@ export async function register(
     const accessToken = signAccessToken(tokenPayload);
     const refreshToken = signRefreshToken(tokenPayload);
 
-    const user = await UserModel.create({
-      _id: userId,
-      fullName: input.fullName,
-      email: input.email.toLowerCase(),
-      passwordHash,
-      defaultCurrency: input.defaultCurrency,
-      timezone: input.timezone,
-      activeHouseholdId: household._id,
-      refreshTokens: [
-        {
-          tokenHash: computeSha256Hex(refreshToken),
-          expiresAt: new Date(Date.now() + 14 * 24 * 3600 * 1000),
-          deviceInfo: req.headers['user-agent']?.slice(0, 80) ?? 'Web Browser',
-        },
-      ],
-    });
+    let user;
+    try {
+      user = await UserModel.create({
+        _id: userId,
+        fullName: input.fullName,
+        email: input.email.toLowerCase(),
+        passwordHash,
+        defaultCurrency: input.defaultCurrency,
+        timezone: input.timezone,
+        activeHouseholdId: household._id,
+        refreshTokens: [
+          {
+            tokenHash: computeSha256Hex(refreshToken),
+            expiresAt: new Date(Date.now() + 14 * 24 * 3600 * 1000),
+            deviceInfo: req.headers['user-agent']?.slice(0, 80) ?? 'Web Browser',
+          },
+        ],
+      });
+    } catch (createUserErr) {
+      await HouseholdModel.deleteOne({ _id: household._id }).catch(() => undefined);
+      throw createUserErr;
+    }
 
     res.status(201).json({
       accessToken,

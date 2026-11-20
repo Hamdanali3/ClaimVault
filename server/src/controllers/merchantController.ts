@@ -47,3 +47,21 @@ export async function updateMerchantProfile(
     next(err);
   }
 }
+
+export async function deleteMerchantProfile(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    if (!req.auth) throw new AppError('Unauthorized', 401, 'UNAUTHORIZED');
+    const deleted = await MerchantProfileModel.findOneAndDelete({
+      _id: req.params.id,
+      householdId: req.auth.householdId,
+    });
+    if (!deleted) throw new AppError('Merchant profile not found', 404, 'NOT_FOUND');
+    res.json({ ok: true, deletedId: req.params.id });
+  } catch (err) {
+    next(err);
+  }
+}

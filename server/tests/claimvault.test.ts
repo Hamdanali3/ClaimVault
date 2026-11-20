@@ -5,6 +5,7 @@ import { ensureProofStorageReady } from '../src/config/storage.js';
 import { ensureDemoWorkspaceSeeded } from '../src/seed/demoSeeder.js';
 import { createApp } from '../src/app.js';
 import { addMonthsUTC } from '../src/services/ai/policyResolver.js';
+import { runDeterministicExtraction } from '../src/services/ai/structuredExtractor.js';
 
 const app = createApp();
 
@@ -188,5 +189,67 @@ describe('ClaimVault MERN + AI Backend Integration Suite', () => {
     expect(refreshRes.status).toBe(200);
     expect(refreshRes.body.accessToken).toBeTruthy();
     expect(refreshRes.body.refreshToken).not.toBe(loginRes.body.refreshToken);
+  });
+
+  it('extracts Daraz Order # without false-positive ORDER CONFIRMATION match and aligns SVG bounding boxes', () => {
+    const darazReceipt = [
+      'DARAZ MALL OFFICIAL ORDER CONFIRMATION',
+      'Order #: DZ-778899',
+      'Date: 2026-11-20',
+      'Item: Samsung 27" Odyssey G5 QHD Monitor',
+      'Serial: SAM-G527-4491',
+      'Total Paid: PKR 64,500',
+    ].join('\n');
+
+    const parsed = runDeterministicExtraction(darazReceipt, '2026-11-20');
+    expect(parsed.identifiers.orderNumber).toBe('DZ-778899');
+    expect(parsed.identifiers.serialNumber).toBe('SAM-G527-4491');
+
+    // Line 2 (Date) in a 6-line card (height=460, topPad=104, lineHeight=28 -> baselineY=160, yStart=(160-19)/460≈0.307)
+    const dateBox = parsed.boundingBoxes.purchaseDateISO;
+    expect(dateBox).toBeDefined();
+    expect(dateBox[1]).toBeGreaterThanOrEqual(0.29);
+    expect(dateBox[1]).toBeLessThanOrEqual(0.33);
+  });
+
+  it('returns structured health diagnostics, maps invalid ObjectId to 400, and supports merchant & member CRUD', async () => {
+    const health = await request(app).get('/api/health');
+    expect(health.status).toBe(200);
+    expect(health.body.ok).toBe(true);
+    expect(health.body.databaseConnected).toBe(true);
+
+    const badId = await request(app).get('/api/v1/vault/not-a-valid-objectid');
+    expect(badId.status).toBe(400);
+    expect(badId.body.error.code).toBe('INVALID_ID');
+
+    // Merchant profile update & delete
+    const listMerchants = await request(app).get('/api/v1/merchants');
+    expect(listMerchants.status).toBe(200);
+    const targetMerchant = listMerchants.body.merchantProfiles[0];
+    expect(targetMerchant).toBeDefined();
+
+    const patchMerchant = await request(app)
+      .patch(`/api/v1/merchants/${targetMerchant._id}`)
+      .send({ defaultReturnWindowDays: 21, defaultWarrantyMonths: 18 });
+    expect(patchMerchant.status).toBe(200);
+    expect(patchMerchant.body.merchantProfile.defaultReturnWindowDays).toBe(21);
+    expect(patchMerchant.body.merchantProfile.defaultWarrantyMonths).toBe(18);
+
+    const delMerchant = await request(app).delete(`/api/v1/merchants/${targetMerchant._id}`);
+    expect(delMerchant.status).toBe(200);
+    expect(delMerchant.body.ok).toBe(true);
+
+    // Household member invite (VIEWER) & removal
+    const invite = await request(app)
+      .post('/api/v1/household/members')
+      .send({ email: 'ayesha@example.com', role: 'VIEWER' });
+    expect(invite.status).toBe(201);
+    expect(invite.body.member.role).toBe('VIEWER');
+
+    const removeMember = await request(app).delete(
+      `/api/v1/household/members/${invite.body.member.userId}`,
+    );
+    expect(removeMember.status).toBe(200);
+    expect(removeMember.body.ok).toBe(true);
   });
 });

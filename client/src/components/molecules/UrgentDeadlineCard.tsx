@@ -55,7 +55,7 @@ export function UrgentDeadlineCard({
         <CountdownBadge item={item} />
       </div>
 
-      <div className="flex flex-col justify-between gap-4 p-4 sm:flex-row sm:items-center">
+      <div className="flex flex-col justify-between gap-4 p-4 md:flex-row md:items-center">
         <div
           onClick={() => onInspect(item)}
           className="min-w-0 flex-1 cursor-pointer space-y-1.5"
@@ -85,8 +85,8 @@ export function UrgentDeadlineCard({
         </div>
 
         {/* Spatially invariant action cluster (Fitts's Law >= 44px height) */}
-        <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
-          <div className="mr-2 text-right">
+        <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between md:justify-end">
+          <div className="flex items-baseline justify-between border-t border-[#E6E4DD] pt-2.5 sm:block sm:border-t-0 sm:pt-0 sm:mr-2 sm:text-right">
             <TabularPrice
               amount={item.financials.amount}
               currency={item.financials.currency}
@@ -97,48 +97,51 @@ export function UrgentDeadlineCard({
             </div>
           </div>
 
-          {!isSubscription && (
+          <div className="flex items-center gap-2">
+            {!isSubscription && (
+              <button
+                type="button"
+                onMouseEnter={() => setHoverSecondary(true)}
+                onMouseLeave={() => setHoverSecondary(false)}
+                onClick={() => onDownloadClaimPdf(item)}
+                className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-[#E6E4DD] bg-[#FAF9F6] px-3 text-xs font-medium text-[#141413] hover:bg-[#F3F1EC] focus:outline-none focus:ring-2 focus:ring-[#141413] sm:flex-initial sm:px-3.5"
+              >
+                <FileDown className="h-3.5 w-3.5 shrink-0" />
+                <span>Claim PDF</span>
+                <HotkeyHint shortcut="C" active={hoverSecondary} />
+              </button>
+            )}
+
             <button
               type="button"
-              onMouseEnter={() => setHoverSecondary(true)}
-              onMouseLeave={() => setHoverSecondary(false)}
-              onClick={() => onDownloadClaimPdf(item)}
-              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border border-[#E6E4DD] bg-[#FAF9F6] px-3.5 text-xs font-medium text-[#141413] hover:bg-[#F3F1EC] focus:outline-none focus:ring-2 focus:ring-[#141413]"
+              onMouseEnter={() => setHoverPrimary(true)}
+              onMouseLeave={() => setHoverPrimary(false)}
+              onClick={() =>
+                isSubscription || item.nextDeadlineType === 'RETURN'
+                  ? onResolveOutcome(item)
+                  : onDownloadClaimPdf(item)
+              }
+              className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-[#141413] bg-[#141413] px-3.5 text-xs font-semibold text-[#FAF9F6] hover:bg-[#2A2A28] focus:outline-none focus:ring-2 focus:ring-[#141413] sm:min-w-[148px] sm:flex-initial sm:px-4"
             >
-              <FileDown className="h-3.5 w-3.5" />
-              <span>Claim PDF</span>
-              <HotkeyHint shortcut="C" active={hoverSecondary} />
+              {isSubscription ? (
+                <Ban className="h-3.5 w-3.5 shrink-0" />
+              ) : (
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+              )}
+              <span>{primaryLabel}</span>
+              <HotkeyHint shortcut="R" active={hoverPrimary} />
             </button>
-          )}
 
-          <button
-            type="button"
-            onMouseEnter={() => setHoverPrimary(true)}
-            onMouseLeave={() => setHoverPrimary(false)}
-            onClick={() =>
-              isSubscription || item.nextDeadlineType === 'RETURN'
-                ? onResolveOutcome(item)
-                : onDownloadClaimPdf(item)
-            }
-            className="inline-flex min-h-[44px] min-w-[152px] items-center justify-center gap-1.5 rounded-md border border-[#141413] bg-[#141413] px-4 text-xs font-semibold text-[#FAF9F6] hover:bg-[#2A2A28] focus:outline-none focus:ring-2 focus:ring-[#141413]"
-          >
-            {isSubscription ? (
-              <Ban className="h-3.5 w-3.5" />
-            ) : (
-              <CheckCircle2 className="h-3.5 w-3.5" />
-            )}
-            <span>{primaryLabel}</span>
-            <HotkeyHint shortcut="R" active={hoverPrimary} />
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onInspect(item)}
-            title="Inspect Receipt Proof & Details"
-            className="inline-flex min-h-[44px] w-[44px] items-center justify-center rounded-md border border-[#E6E4DD] bg-[#FFFFFF] text-[#615F59] hover:bg-[#F3F1EC] hover:text-[#141413]"
-          >
-            <ArrowUpRight className="h-4 w-4" />
-          </button>
+            <button
+              type="button"
+              onClick={() => onInspect(item)}
+              aria-label={`Inspect receipt proof and details for ${item.title}`}
+              title="Inspect Receipt Proof & Details"
+              className="inline-flex min-h-[44px] w-[44px] shrink-0 items-center justify-center rounded-md border border-[#E6E4DD] bg-[#FFFFFF] text-[#615F59] hover:bg-[#F3F1EC] hover:text-[#141413]"
+            >
+              <ArrowUpRight className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       </div>
     </article>

@@ -18,6 +18,7 @@ const __dirname = path.dirname(__filename);
 
 export interface CreateAppOptions {
   initMiddleware?: express.RequestHandler;
+  ensureInitialized?: () => Promise<void>;
 }
 
 function isAllowedOrigin(origin: string): boolean {
@@ -68,21 +69,52 @@ export function createApp(options?: CreateAppOptions): express.Express {
   app.use(express.json({ limit: '5mb' }));
   app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
-  if (options?.initMiddleware) {
-    app.use(options.initMiddleware);
-  }
+  app.get('/api/health', async (_req, res) => {
+    let databaseConnected = true;
+    let databaseError: string | null = null;
+    let databaseShardError: string | null = null;
 
-  app.get('/api/health', (_req, res) => {
+    if (options?.ensureInitialized) {
+      try {
+        await options.ensureInitialized();
+      } catch (err) {
+        databaseConnected = false;
+        const rawMsg = err instanceof Error ? err.message : 'Database connection failed';
+        const reason = (err as { reason?: { servers?: Map<string, { error?: { message?: string } }> } })
+          ?.reason;
+        if (reason?.servers instanceof Map) {
+          for (const [, desc] of reason.servers.entries()) {
+            if (desc?.error?.message) {
+              databaseShardError = desc.error.message.slice(0, 220);
+              break;
+            }
+          }
+        }
+        databaseError =
+          rawMsg.includes('whitelist') || rawMsg.includes('Could not connect to any servers')
+            ? 'MongoDB Atlas rejected the connection (ensure 0.0.0.0/0 is allowed in Atlas Network Access).'
+            : rawMsg.slice(0, 220);
+      }
+    }
+
     const systemStatus = getSystemStatus();
-    res.json({
-      ok: true,
+    res.status(databaseConnected ? 200 : 503).json({
+      ok: databaseConnected,
       service: 'claimvault-api',
+      runtimeNode: process.version,
+      databaseConnected,
       databaseMode: getDatabaseMode(),
+      ...(databaseError ? { databaseError } : {}),
+      ...(databaseShardError ? { databaseShardError } : {}),
       aiProviderConfigured: Boolean(env.GEMINI_API_KEY || env.OPENAI_API_KEY),
       systemStatus,
       timestamp: new Date().toISOString(),
     });
   });
+
+  if (options?.initMiddleware) {
+    app.use(options.initMiddleware);
+  }
 
   // Vercel Cron Job endpoint for scheduled deadline reminder sweeps
   app.get('/api/v1/cron/deadline-sweep', async (req, res, next) => {

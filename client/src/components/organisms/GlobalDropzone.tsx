@@ -49,14 +49,18 @@ export function GlobalDropzone({
       aria-label="Receipt capture dropzone"
       className="rounded-lg border border-[#E6E4DD] bg-[#FFFFFF] p-4"
     >
-      <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
-        <div className="space-y-1">
+      <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
+        <div className="min-w-0 space-y-1">
           <div className="text-sm font-medium text-[#141413]">
-            Drop a receipt photo, PDF, or paste an order message (
-            <kbd className="rounded border border-[#E6E4DD] bg-[#F3F1EC] px-1.5 py-0.5 text-[11px] tabular-ledger">
-              Ctrl+V
-            </kbd>
-            ).
+            Drop a receipt photo, PDF, or paste an order message
+            <span className="hidden sm:inline">
+              {' ('}
+              <kbd className="rounded border border-[#E6E4DD] bg-[#F3F1EC] px-1.5 py-0.5 text-[11px] tabular-ledger">
+                Ctrl+V
+              </kbd>
+              {')'}
+            </span>
+            .
           </div>
           <p className="text-xs text-[#615F59]">
             {isIngesting
@@ -69,7 +73,7 @@ export function GlobalDropzone({
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="grid shrink-0 grid-cols-2 gap-2 sm:flex sm:flex-nowrap sm:items-center">
           <input
             ref={fileInputRef}
             type="file"
@@ -85,9 +89,9 @@ export function GlobalDropzone({
             onMouseEnter={() => setHoverUpload(true)}
             onMouseLeave={() => setHoverUpload(false)}
             onClick={() => fileInputRef.current?.click()}
-            className="inline-flex min-h-[44px] items-center gap-2 rounded-md border border-[#141413] bg-[#141413] px-4 text-xs font-semibold text-[#FAF9F6] hover:bg-[#2A2A28] disabled:opacity-50"
+            className="col-span-2 inline-flex min-h-[44px] items-center justify-center gap-2 whitespace-nowrap rounded-md border border-[#141413] bg-[#141413] px-4 text-xs font-semibold text-[#FAF9F6] hover:bg-[#2A2A28] disabled:opacity-50 sm:col-span-1"
           >
-            <Upload className="h-4 w-4" />
+            <Upload className="h-4 w-4 shrink-0" />
             <span>Upload Receipt / PDF</span>
             <HotkeyHint shortcut="N" active={hoverUpload} />
           </button>
@@ -96,12 +100,12 @@ export function GlobalDropzone({
             type="button"
             disabled={isIngesting}
             onClick={() => setPasteExpanded((v) => !v)}
-            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border border-[#E6E4DD] bg-[#FAF9F6] px-3.5 text-xs font-medium text-[#141413] hover:bg-[#F3F1EC] disabled:opacity-50"
+            className="inline-flex min-h-[44px] items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-[#E6E4DD] bg-[#FAF9F6] px-3 text-xs font-medium text-[#141413] hover:bg-[#F3F1EC] disabled:opacity-50"
           >
-            <ClipboardPaste className="h-3.5 w-3.5" />
+            <ClipboardPaste className="h-3.5 w-3.5 shrink-0" />
             <span>Paste Order Text</span>
             <ChevronDown
-              className={`h-3.5 w-3.5 transition-transform ${
+              className={`h-3.5 w-3.5 shrink-0 transition-transform ${
                 pasteExpanded ? 'rotate-180' : ''
               }`}
             />
@@ -111,15 +115,15 @@ export function GlobalDropzone({
             type="button"
             disabled={isIngesting}
             onClick={onTrySampleReceipt}
-            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border border-[#E6E4DD] bg-[#FFFFFF] px-3 text-xs font-medium text-[#615F59] hover:bg-[#F3F1EC] hover:text-[#141413] disabled:opacity-50"
+            className="inline-flex min-h-[44px] items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-[#E6E4DD] bg-[#FFFFFF] px-3 text-xs font-medium text-[#615F59] hover:bg-[#F3F1EC] hover:text-[#141413] disabled:opacity-50"
           >
-            <FileText className="h-3.5 w-3.5" />
+            <FileText className="h-3.5 w-3.5 shrink-0" />
             <span>Try Sample Receipt</span>
           </button>
         </div>
       </div>
 
-      {isIngesting && (
+      {(isIngesting || ingestionStage === 'DATES_VERIFIED') && (
         <div className="mt-3">
           <StagePill currentStage={ingestionStage} />
         </div>
@@ -127,7 +131,11 @@ export function GlobalDropzone({
 
       {pasteExpanded && (
         <form onSubmit={submitManualText} className="mt-3 space-y-2 border-t border-[#E6E4DD] pt-3">
+          <label htmlFor="paste-order-textarea" className="sr-only">
+            Order or receipt text
+          </label>
           <textarea
+            id="paste-order-textarea"
             rows={4}
             value={pasteDraft}
             onChange={(e) => setPasteDraft(e.target.value)}

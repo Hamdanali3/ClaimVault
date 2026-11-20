@@ -30,6 +30,9 @@ const initMiddleware: RequestHandler = async (_req, _res, next) => {
   }
 };
 
-const app = createApp({ initMiddleware });
+const app = createApp({
+  initMiddleware,
+  ensureInitialized: ensureServerlessInitialized,
+});
 
 export default app;

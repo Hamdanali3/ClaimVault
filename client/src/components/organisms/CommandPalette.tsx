@@ -39,8 +39,20 @@ export function CommandPalette({
   const [query, setQuery] = useState('');
 
   useEffect(() => {
-    if (!open) setQuery('');
-  }, [open]);
+    if (!open) {
+      setQuery('');
+      return;
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onOpenChange(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [open, onOpenChange]);
 
   if (!open) return null;
 
@@ -52,10 +64,14 @@ export function CommandPalette({
     }
     allItems.push(...map.values());
   }
+  const itemsWithSerial = allItems.filter((i) => i.identifiers.serialNumber);
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-[#141413]/35 px-4 pt-24"
+      role="dialog"
+      aria-modal="true"
+      aria-label="ClaimVault Command Palette"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-[#141413]/35 px-4 pt-20 sm:pt-24"
       onClick={() => onOpenChange(false)}
     >
       <div
@@ -64,7 +80,7 @@ export function CommandPalette({
       >
         <Command label="ClaimVault Command Palette" className="w-full">
           <div className="flex items-center border-b border-[#E6E4DD] px-3.5">
-            <Search className="mr-2.5 h-4 w-4 text-[#615F59]" />
+            <Search className="mr-2.5 h-4 w-4 text-[#615F59]" aria-hidden="true" />
             <Command.Input
               autoFocus
               value={query}
@@ -72,9 +88,14 @@ export function CommandPalette({
               placeholder="Jump to receipt, serial #, merchant, or action..."
               className="h-12 w-full bg-transparent text-sm text-[#141413] placeholder:text-[#615F59] focus:outline-none"
             />
-            <kbd className="rounded border border-[#E6E4DD] bg-[#F3F1EC] px-1.5 py-0.5 text-[10px] text-[#615F59] tabular-ledger">
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              aria-label="Close command palette"
+              className="rounded border border-[#E6E4DD] bg-[#F3F1EC] px-1.5 py-0.5 text-[10px] text-[#615F59] hover:border-[#141413] hover:text-[#141413] tabular-ledger"
+            >
               ESC
-            </kbd>
+            </button>
           </div>
 
           <Command.List className="max-h-80 overflow-y-auto p-2 text-xs">
@@ -82,56 +103,57 @@ export function CommandPalette({
               No matching receipts or commands found.
             </Command.Empty>
 
-            <Command.Group
-              heading="Vault Receipts & Assets"
-              className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[#615F59]"
-            >
-              {allItems.map((item) => (
-                <Command.Item
-                  key={item._id}
-                  value={`${item.title} ${item.merchantName} ${item.identifiers.serialNumber ?? ''} ${item.identifiers.orderNumber ?? ''}`}
-                  onSelect={() => {
-                    onSelectItem(item);
-                    onOpenChange(false);
-                  }}
-                  className="mt-1 flex cursor-pointer items-center justify-between rounded-md px-2.5 py-2 text-[#141413] aria-selected:bg-[#F3F1EC]"
-                >
-                  <div className="flex min-w-0 items-center gap-2">
-                    <FileText className="h-3.5 w-3.5 shrink-0 text-[#615F59]" />
-                    <div className="truncate">
-                      <span className="font-medium">{item.title}</span>
-                      <span className="ml-2 text-[#615F59]">{item.merchantName}</span>
+            {allItems.length > 0 && (
+              <Command.Group
+                heading="Vault Receipts & Assets"
+                className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[#615F59]"
+              >
+                {allItems.map((item) => (
+                  <Command.Item
+                    key={item._id}
+                    value={`${item.title} ${item.merchantName} ${item.identifiers.serialNumber ?? ''} ${item.identifiers.orderNumber ?? ''}`}
+                    onSelect={() => {
+                      onSelectItem(item);
+                      onOpenChange(false);
+                    }}
+                    className="mt-1 flex cursor-pointer items-center justify-between rounded-md px-2.5 py-2 text-[#141413] aria-selected:bg-[#F3F1EC]"
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <FileText className="h-3.5 w-3.5 shrink-0 text-[#615F59]" />
+                      <div className="truncate">
+                        <span className="font-medium">{item.title}</span>
+                        <span className="ml-2 text-[#615F59]">{item.merchantName}</span>
+                      </div>
                     </div>
-                  </div>
-                  <span className="ml-2 shrink-0 text-[#615F59] tabular-ledger">
-                    {formatMoney(item.financials.amount, item.financials.currency)}
-                  </span>
-                </Command.Item>
-              ))}
-            </Command.Group>
+                    <span className="ml-2 shrink-0 text-[#615F59] tabular-ledger">
+                      {formatMoney(item.financials.amount, item.financials.currency)}
+                    </span>
+                  </Command.Item>
+                ))}
+              </Command.Group>
+            )}
 
-            <Command.Group
-              heading="Quick Claim Exports & Serials"
-              className="mt-2 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[#615F59]"
-            >
-              {allItems.slice(0, 4).map((item) => (
-                <Command.Item
-                  key={`pdf-${item._id}`}
-                  value={`export pdf claim dossier ${item.title} ${item.merchantName}`}
-                  onSelect={() => {
-                    onDownloadClaimPdf(item);
-                    onOpenChange(false);
-                  }}
-                  className="mt-1 flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-[#141413] aria-selected:bg-[#F3F1EC]"
-                >
-                  <FileDown className="h-3.5 w-3.5 text-[#615F59]" />
-                  <span>Download Claim PDF: {item.title}</span>
-                </Command.Item>
-              ))}
+            {(allItems.length > 0 || itemsWithSerial.length > 0) && (
+              <Command.Group
+                heading="Quick Claim Exports & Serials"
+                className="mt-2 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[#615F59]"
+              >
+                {allItems.slice(0, 4).map((item) => (
+                  <Command.Item
+                    key={`pdf-${item._id}`}
+                    value={`export pdf claim dossier ${item.title} ${item.merchantName}`}
+                    onSelect={() => {
+                      onDownloadClaimPdf(item);
+                      onOpenChange(false);
+                    }}
+                    className="mt-1 flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-[#141413] aria-selected:bg-[#F3F1EC]"
+                  >
+                    <FileDown className="h-3.5 w-3.5 text-[#615F59]" />
+                    <span>Download Claim PDF: {item.title}</span>
+                  </Command.Item>
+                ))}
 
-              {allItems
-                .filter((i) => i.identifiers.serialNumber)
-                .map((item) => (
+                {itemsWithSerial.map((item) => (
                   <Command.Item
                     key={`sn-${item._id}`}
                     value={`copy serial ${item.title} ${item.identifiers.serialNumber}`}
@@ -147,7 +169,8 @@ export function CommandPalette({
                     </span>
                   </Command.Item>
                 ))}
-            </Command.Group>
+              </Command.Group>
+            )}
 
             <Command.Group
               heading="Navigation & Speed Demos"

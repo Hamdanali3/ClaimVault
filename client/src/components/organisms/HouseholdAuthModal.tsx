@@ -1,13 +1,26 @@
-import { useEffect, useState } from 'react';
-import { X, Copy, Check, LogOut, Users } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  X,
+  Copy,
+  Check,
+  LogOut,
+  Users,
+  RotateCcw,
+  AlertTriangle,
+  UserMinus,
+  History,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import type { SystemStatusDTO } from '@claimvault/shared';
 import {
+  fetchAuditLogsApi,
   fetchHouseholdMembers,
   inviteHouseholdMemberApi,
   loginAccount,
+  logoutAccount,
   registerAccount,
-  setStoredTokens,
+  removeHouseholdMemberApi,
+  type AuditLogEntryDTO,
   type AuthSessionUser,
 } from '../../services/api';
 
@@ -16,6 +29,7 @@ interface HouseholdAuthModalProps {
   onClose: () => void;
   sessionUser: AuthSessionUser | null;
   systemStatus?: SystemStatusDTO;
+  apiError?: string | null;
   onAuthChanged: () => Promise<void>;
 }
 
@@ -24,16 +38,23 @@ export function HouseholdAuthModal({
   onClose,
   sessionUser,
   systemStatus,
+  apiError,
   onAuthChanged,
 }: HouseholdAuthModalProps) {
-  const [mode, setMode] = useState<'HOUSEHOLD' | 'STACK' | 'LOGIN' | 'REGISTER'>('HOUSEHOLD');
+  const [mode, setMode] = useState<'HOUSEHOLD' | 'STACK' | 'AUDIT' | 'LOGIN' | 'REGISTER'>(
+    'HOUSEHOLD',
+  );
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [currency, setCurrency] = useState<'PKR' | 'USD'>('PKR');
   const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState<'EDITOR' | 'VIEWER'>('EDITOR');
   const [copiedAlias, setCopiedAlias] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  const [householdLoading, setHouseholdLoading] = useState(false);
+  const [householdError, setHouseholdError] = useState<string | null>(null);
   const [household, setHousehold] = useState<{
     name: string;
     planTier: string;
@@ -41,16 +62,65 @@ export function HouseholdAuthModal({
     members: Array<{ userId: string; fullName: string; email: string; role: string }>;
   } | null>(null);
 
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntryDTO[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
+
+  const loadHousehold = useCallback(() => {
+    setHouseholdLoading(true);
+    setHouseholdError(null);
+    fetchHouseholdMembers()
+      .then((data) => {
+        setHousehold(data);
+        setHouseholdLoading(false);
+      })
+      .catch(() => {
+        setHousehold(null);
+        setHouseholdError('Could not load household workspace details from the API.');
+        setHouseholdLoading(false);
+      });
+  }, []);
+
+  const loadAuditLogs = useCallback(() => {
+    setAuditLoading(true);
+    setAuditError(null);
+    fetchAuditLogsApi()
+      .then((logs) => {
+        setAuditLogs(logs);
+        setAuditLoading(false);
+      })
+      .catch(() => {
+        setAuditError('Unable to load cryptographic audit history.');
+        setAuditLoading(false);
+      });
+  }, []);
+
   useEffect(() => {
     if (!open) return;
-    fetchHouseholdMembers()
-      .then(setHousehold)
-      .catch(() => setHousehold(null));
-  }, [open, sessionUser]);
+    loadHousehold();
+  }, [open, sessionUser, loadHousehold]);
+
+  useEffect(() => {
+    if (!open || mode !== 'AUDIT') return;
+    loadAuditLogs();
+  }, [open, mode, loadAuditLogs]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, onClose]);
 
   if (!open) return null;
 
   const isDemo = sessionUser?.isDemoWorkspace !== false;
+  const isOwner = !sessionUser?.role || sessionUser.role === 'OWNER';
 
   const copyAlias = async () => {
     if (!household?.inboundForwardingAlias) return;
@@ -105,10 +175,9 @@ export function HouseholdAuthModal({
     if (!inviteEmail.trim()) return;
     setSubmitting(true);
     try {
-      await inviteHouseholdMemberApi(inviteEmail.trim(), 'EDITOR');
+      await inviteHouseholdMemberApi(inviteEmail.trim(), inviteRole);
       setInviteEmail('');
-      const updated = await fetchHouseholdMembers();
-      setHousehold(updated);
+      loadHousehold();
       toast.success('Household member added.');
     } catch (err: unknown) {
       const msg =
@@ -120,25 +189,54 @@ export function HouseholdAuthModal({
     }
   };
 
-  const signOutToDemo = async () => {
-    setStoredTokens(null, null);
-    await onAuthChanged();
-    toast.success('Returned to Demo Household Workspace.');
-    onClose();
+  const handleRemoveMember = async (userId: string, name: string) => {
+    setSubmitting(true);
+    try {
+      await removeHouseholdMemberApi(userId);
+      loadHousehold();
+      toast.success(`Removed ${name} from household.`);
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data
+          ?.error?.message ?? 'Could not remove member';
+      toast.error(msg);
+    } finally {
+      setSubmitting(false);
+    }
   };
+
+  const signOutToDemo = async () => {
+    setSubmitting(true);
+    try {
+      await logoutAccount();
+      await onAuthChanged();
+      toast.success('Returned to Demo Household Workspace.');
+      onClose();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const stackOnline = Boolean(systemStatus) && !apiError;
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="household-modal-title"
       className="fixed inset-0 z-50 flex items-center justify-center bg-[#141413]/35 p-4"
       onClick={onClose}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-lg rounded-lg border border-[#E6E4DD] bg-[#FAF9F6] shadow-xl"
+        className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-[#E6E4DD] bg-[#FAF9F6] shadow-xl"
       >
         <div className="flex items-center justify-between border-b border-[#E6E4DD] bg-[#FFFFFF] px-5 py-3.5">
           <div>
-            <h2 className="text-base font-semibold text-[#141413]">
+            <h2
+              id="household-modal-title"
+              className="text-base font-semibold text-[#141413]"
+            >
               Household & Account Workspace
             </h2>
             <p className="text-xs text-[#615F59]">
@@ -150,14 +248,15 @@ export function HouseholdAuthModal({
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex h-8 w-8 items-center justify-center rounded border border-[#E6E4DD] text-[#615F59] hover:text-[#141413]"
+            aria-label="Close workspace modal"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded border border-[#E6E4DD] text-[#615F59] hover:text-[#141413]"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
         <div className="flex flex-wrap gap-1.5 border-b border-[#E6E4DD] bg-[#FFFFFF] px-5 py-2 text-xs">
-          {(['HOUSEHOLD', 'STACK', 'LOGIN', 'REGISTER'] as const).map((tab) => (
+          {(['HOUSEHOLD', 'STACK', 'AUDIT', 'LOGIN', 'REGISTER'] as const).map((tab) => (
             <button
               key={tab}
               type="button"
@@ -172,9 +271,11 @@ export function HouseholdAuthModal({
                 ? 'Shared Household'
                 : tab === 'STACK'
                   ? 'Connected Stack'
-                  : tab === 'LOGIN'
-                    ? 'Sign In'
-                    : 'Create Account'}
+                  : tab === 'AUDIT'
+                    ? 'Audit Log'
+                    : tab === 'LOGIN'
+                      ? 'Sign In'
+                      : 'Create Account'}
             </button>
           ))}
         </div>
@@ -182,20 +283,42 @@ export function HouseholdAuthModal({
         <div className="p-5">
           {mode === 'HOUSEHOLD' && (
             <div className="space-y-4 text-xs">
-              {household && (
+              {householdLoading ? (
+                <div className="rounded-md border border-[#E6E4DD] bg-[#FFFFFF] p-4 text-center text-[#615F59]">
+                  Loading household workspace...
+                </div>
+              ) : householdError ? (
+                <div className="space-y-3 rounded-md border border-[#FDE68A] bg-[#FFFBEB] p-4 text-[#92400E]">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <div>
+                      <div className="font-semibold">Household details unavailable</div>
+                      <p className="mt-0.5 text-[11px]">{householdError}</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={loadHousehold}
+                    className="inline-flex min-h-[34px] items-center gap-1.5 rounded border border-[#92400E] bg-[#FFFFFF] px-3 text-xs font-medium text-[#92400E] hover:bg-[#FEF3C7]"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                    <span>Retry</span>
+                  </button>
+                </div>
+              ) : household ? (
                 <>
                   <div className="rounded-md border border-[#E6E4DD] bg-[#FFFFFF] p-3">
                     <div className="text-[11px] font-medium uppercase text-[#615F59]">
                       Dedicated Inbound Receipt Forwarding Alias
                     </div>
                     <div className="mt-1 flex items-center justify-between gap-2">
-                      <code className="text-xs font-semibold text-[#141413] tabular-ledger">
+                      <code className="truncate text-xs font-semibold text-[#141413] tabular-ledger">
                         {household.inboundForwardingAlias}
                       </code>
                       <button
                         type="button"
                         onClick={() => void copyAlias()}
-                        className="inline-flex items-center gap-1 rounded border border-[#E6E4DD] bg-[#FAF9F6] px-2 py-1 text-[11px] font-medium hover:bg-[#F3F1EC]"
+                        className="inline-flex shrink-0 items-center gap-1 rounded border border-[#E6E4DD] bg-[#FAF9F6] px-2 py-1 text-[11px] font-medium hover:bg-[#F3F1EC]"
                       >
                         {copiedAlias ? (
                           <Check className="h-3 w-3" />
@@ -216,42 +339,75 @@ export function HouseholdAuthModal({
                       {household.members.map((m) => (
                         <li
                           key={m.userId}
-                          className="flex items-center justify-between rounded bg-[#FAF9F6] px-2.5 py-1.5"
+                          className="flex items-center justify-between gap-2 rounded bg-[#FAF9F6] px-2.5 py-1.5"
                         >
-                          <div>
+                          <div className="min-w-0">
                             <span className="font-medium text-[#141413]">{m.fullName}</span>
                             <span className="ml-2 text-[#615F59]">{m.email}</span>
                           </div>
-                          <span className="rounded border border-[#E6E4DD] bg-[#FFFFFF] px-1.5 py-0.5 text-[10px] font-medium tabular-ledger">
-                            {m.role}
-                          </span>
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            <span className="rounded border border-[#E6E4DD] bg-[#FFFFFF] px-1.5 py-0.5 text-[10px] font-medium tabular-ledger">
+                              {m.role}
+                            </span>
+                            {isOwner && m.role !== 'OWNER' && (
+                              <button
+                                type="button"
+                                disabled={submitting}
+                                onClick={() => void handleRemoveMember(m.userId, m.fullName)}
+                                aria-label={`Remove ${m.fullName}`}
+                                title={`Remove ${m.fullName}`}
+                                className="rounded p-1 text-[#991B1B] hover:bg-[#FEF2F2]"
+                              >
+                                <UserMinus className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </div>
                         </li>
                       ))}
                     </ul>
 
-                    <form onSubmit={handleInvite} className="mt-3 flex gap-2">
-                      <input
-                        type="email"
-                        value={inviteEmail}
-                        onChange={(e) => setInviteEmail(e.target.value)}
-                        placeholder="Partner or teammate email..."
-                        className="flex-1 rounded border border-[#E6E4DD] bg-[#FAF9F6] px-2.5 py-1.5 text-xs focus:border-[#141413] focus:outline-none"
-                      />
-                      <button
-                        type="submit"
-                        disabled={submitting}
-                        className="rounded bg-[#141413] px-3 py-1.5 text-xs font-medium text-[#FAF9F6]"
-                      >
-                        Invite
-                      </button>
-                    </form>
+                    {isOwner && (
+                      <form onSubmit={handleInvite} className="mt-3 flex flex-wrap gap-2">
+                        <label htmlFor="invite-member-email" className="sr-only">
+                          Member email address
+                        </label>
+                        <input
+                          id="invite-member-email"
+                          type="email"
+                          value={inviteEmail}
+                          onChange={(e) => setInviteEmail(e.target.value)}
+                          placeholder="Partner or teammate email..."
+                          className="min-w-[160px] flex-1 rounded border border-[#E6E4DD] bg-[#FAF9F6] px-2.5 py-1.5 text-xs focus:border-[#141413] focus:outline-none"
+                        />
+                        <label htmlFor="invite-member-role" className="sr-only">
+                          Member role
+                        </label>
+                        <select
+                          id="invite-member-role"
+                          value={inviteRole}
+                          onChange={(e) => setInviteRole(e.target.value as 'EDITOR' | 'VIEWER')}
+                          className="rounded border border-[#E6E4DD] bg-[#FAF9F6] px-2 py-1.5 text-xs text-[#141413]"
+                        >
+                          <option value="EDITOR">Editor</option>
+                          <option value="VIEWER">Viewer</option>
+                        </select>
+                        <button
+                          type="submit"
+                          disabled={submitting}
+                          className="rounded bg-[#141413] px-3 py-1.5 text-xs font-medium text-[#FAF9F6]"
+                        >
+                          Invite
+                        </button>
+                      </form>
+                    )}
                   </div>
                 </>
-              )}
+              ) : null}
 
               {!isDemo && (
                 <button
                   type="button"
+                  disabled={submitting}
                   onClick={() => void signOutToDemo()}
                   className="inline-flex min-h-[38px] items-center gap-1.5 rounded border border-[#E6E4DD] bg-[#FFFFFF] px-3 text-xs font-medium text-[#141413] hover:bg-[#F3F1EC]"
                 >
@@ -264,80 +420,151 @@ export function HouseholdAuthModal({
 
           {mode === 'STACK' && (
             <div className="space-y-2.5 text-xs">
-              {[
-                {
-                  name: 'Database Ledger',
-                  detail: 'Stores users, households, merchant memory, vault items & audit logs',
-                  status:
-                    systemStatus?.databaseMode === 'atlas'
-                      ? 'MongoDB Atlas Connected'
-                      : 'Embedded Local MongoDB',
-                  ok: systemStatus?.databaseMode === 'atlas',
-                },
-                {
-                  name: 'Deadline Queue Worker',
-                  detail: 'Schedules T-7d, T-48h, and T-12h reminder sweeps via BullMQ or Vercel Cron',
-                  status:
-                    systemStatus?.queueMode === 'bullmq-redis'
-                      ? 'BullMQ · Redis Cloud Connected'
-                      : systemStatus?.queueMode === 'vercel-cron'
-                        ? 'Vercel Cron Sweeper Active'
-                        : 'In-Process Cron Fallback',
-                  ok:
-                    systemStatus?.queueMode === 'bullmq-redis' ||
-                    systemStatus?.queueMode === 'vercel-cron',
-                },
-                {
-                  name: 'Multimodal Receipt AI',
-                  detail: 'Extracts items, dates, serials, confidence & bounding boxes',
-                  status:
-                    systemStatus?.aiMode === 'gemini-vision'
-                      ? 'Gemini Flash Vision Active'
-                      : systemStatus?.aiMode === 'openai-vision'
-                        ? 'OpenAI Vision Active'
-                        : 'Local Tesseract / Regex Fallback',
-                  ok: systemStatus?.aiMode !== 'local-hybrid',
-                },
-                {
-                  name: 'Proof Storage & Alerts',
-                  detail: 'WebP/PDF SHA-256 archive and optional outbound webhooks',
-                  status: `${
-                    systemStatus?.storageDriver === 's3'
-                      ? 'S3'
-                      : systemStatus?.storageDriver === 'mongodb'
-                        ? 'MongoDB Atlas'
-                        : 'Local Disk'
-                  } · WhatsApp ${systemStatus?.webhooks.whatsappConfigured ? 'On' : 'Off'}`,
-                  ok: true,
-                },
-              ].map((row) => (
-                <div
-                  key={row.name}
-                  className="flex items-center justify-between gap-3 rounded-md border border-[#E6E4DD] bg-[#FFFFFF] p-3"
-                >
-                  <div>
-                    <div className="font-semibold text-[#141413]">{row.name}</div>
-                    <div className="text-[11px] text-[#615F59]">{row.detail}</div>
+              {!stackOnline ? (
+                <div className="space-y-3 rounded-md border border-[#FDE68A] bg-[#FFFBEB] p-4 text-[#92400E]">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <div>
+                      <div className="font-semibold">Backend Stack Telemetry Unreachable</div>
+                      <p className="mt-0.5 text-[11px]">
+                        {apiError || 'Live database & pipeline telemetry could not be retrieved from the API.'}
+                      </p>
+                    </div>
                   </div>
-                  <span
-                    className={`shrink-0 rounded border px-2 py-0.5 text-[11px] font-medium tabular-ledger ${
-                      row.ok
-                        ? 'border-[#A7F3D0] bg-[#ECFDF5] text-[#065F46]'
-                        : 'border-[#E6E4DD] bg-[#F3F1EC] text-[#615F59]'
-                    }`}
+                  <button
+                    type="button"
+                    onClick={() => void onAuthChanged()}
+                    className="inline-flex min-h-[34px] items-center gap-1.5 rounded border border-[#92400E] bg-[#FFFFFF] px-3 text-xs font-medium text-[#92400E] hover:bg-[#FEF3C7]"
                   >
-                    {row.status}
-                  </span>
+                    <RotateCcw className="h-3 w-3" />
+                    <span>Retry Connection</span>
+                  </button>
                 </div>
-              ))}
+              ) : (
+                [
+                  {
+                    name: 'Database Ledger',
+                    detail: 'Stores users, households, merchant memory, vault items & audit logs',
+                    status:
+                      systemStatus?.databaseMode === 'atlas'
+                        ? 'MongoDB Atlas Connected'
+                        : 'Embedded Local MongoDB',
+                    ok: systemStatus?.databaseMode === 'atlas',
+                  },
+                  {
+                    name: 'Deadline Queue Worker',
+                    detail: 'Schedules T-7d, T-48h, and T-12h reminder sweeps via BullMQ or Vercel Cron',
+                    status:
+                      systemStatus?.queueMode === 'bullmq-redis'
+                        ? 'BullMQ · Redis Cloud Connected'
+                        : systemStatus?.queueMode === 'vercel-cron'
+                          ? 'Vercel Cron Sweeper Active'
+                          : 'In-Process Cron Fallback',
+                    ok:
+                      systemStatus?.queueMode === 'bullmq-redis' ||
+                      systemStatus?.queueMode === 'vercel-cron',
+                  },
+                  {
+                    name: 'Multimodal Receipt AI',
+                    detail: 'Extracts items, dates, serials, confidence & bounding boxes',
+                    status:
+                      systemStatus?.aiMode === 'gemini-vision'
+                        ? 'Gemini Flash Vision Active'
+                        : systemStatus?.aiMode === 'openai-vision'
+                          ? 'OpenAI Vision Active'
+                          : 'Local Tesseract / Regex Fallback',
+                    ok: systemStatus?.aiMode !== 'local-hybrid',
+                  },
+                  {
+                    name: 'Proof Storage & Alerts',
+                    detail: 'WebP/PDF SHA-256 archive and optional outbound webhooks',
+                    status: `${
+                      systemStatus?.storageDriver === 's3'
+                        ? 'S3'
+                        : systemStatus?.storageDriver === 'mongodb'
+                          ? 'MongoDB Atlas'
+                          : 'Local Disk'
+                    } · WhatsApp ${systemStatus?.webhooks.whatsappConfigured ? 'On' : 'Off'}`,
+                    ok: true,
+                  },
+                ].map((row) => (
+                  <div
+                    key={row.name}
+                    className="flex items-center justify-between gap-3 rounded-md border border-[#E6E4DD] bg-[#FFFFFF] p-3"
+                  >
+                    <div>
+                      <div className="font-semibold text-[#141413]">{row.name}</div>
+                      <div className="text-[11px] text-[#615F59]">{row.detail}</div>
+                    </div>
+                    <span
+                      className={`shrink-0 rounded border px-2 py-0.5 text-[11px] font-medium tabular-ledger ${
+                        row.ok
+                          ? 'border-[#A7F3D0] bg-[#ECFDF5] text-[#065F46]'
+                          : 'border-[#E6E4DD] bg-[#F3F1EC] text-[#615F59]'
+                      }`}
+                    >
+                      {row.status}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {mode === 'AUDIT' && (
+            <div className="space-y-3 text-xs">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 font-semibold text-[#141413]">
+                  <History className="h-3.5 w-3.5 text-[#615F59]" />
+                  <span>Recent Cryptographic & Ledger Events</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={loadAuditLogs}
+                  className="inline-flex items-center gap-1 rounded border border-[#E6E4DD] bg-[#FFFFFF] px-2 py-1 text-[11px] text-[#615F59] hover:text-[#141413]"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  <span>Refresh</span>
+                </button>
+              </div>
+
+              {auditLoading ? (
+                <div className="rounded-md border border-[#E6E4DD] bg-[#FFFFFF] p-4 text-center text-[#615F59]">
+                  Loading audit logs...
+                </div>
+              ) : auditError ? (
+                <div className="rounded-md border border-[#FDE68A] bg-[#FFFBEB] p-4 text-[#92400E]">
+                  {auditError}
+                </div>
+              ) : auditLogs.length === 0 ? (
+                <div className="rounded-md border border-[#E6E4DD] bg-[#FFFFFF] p-4 text-center text-[#615F59]">
+                  No activity events recorded for this household yet.
+                </div>
+              ) : (
+                <div className="max-h-64 divide-y divide-[#E6E4DD] overflow-y-auto rounded-md border border-[#E6E4DD] bg-[#FFFFFF]">
+                  {auditLogs.slice(0, 20).map((log) => (
+                    <div key={log._id} className="flex items-center justify-between gap-2 px-3 py-2">
+                      <span className="font-medium text-[#141413] tabular-ledger">
+                        {log.eventType.replace(/_/g, ' ')}
+                      </span>
+                      <span className="shrink-0 text-[11px] text-[#615F59] tabular-ledger">
+                        {new Date(log.createdAt).toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
           {mode === 'LOGIN' && (
             <form onSubmit={handleLogin} className="space-y-3 text-xs">
               <div>
-                <label className="mb-1 block font-medium text-[#141413]">Email</label>
+                <label htmlFor="auth-login-email" className="mb-1 block font-medium text-[#141413]">
+                  Email
+                </label>
                 <input
+                  id="auth-login-email"
                   type="email"
                   required
                   value={email}
@@ -346,8 +573,11 @@ export function HouseholdAuthModal({
                 />
               </div>
               <div>
-                <label className="mb-1 block font-medium text-[#141413]">Password</label>
+                <label htmlFor="auth-login-password" className="mb-1 block font-medium text-[#141413]">
+                  Password
+                </label>
                 <input
+                  id="auth-login-password"
                   type="password"
                   required
                   value={password}
@@ -368,8 +598,11 @@ export function HouseholdAuthModal({
           {mode === 'REGISTER' && (
             <form onSubmit={handleRegister} className="space-y-3 text-xs">
               <div>
-                <label className="mb-1 block font-medium text-[#141413]">Full Name</label>
+                <label htmlFor="auth-reg-name" className="mb-1 block font-medium text-[#141413]">
+                  Full Name
+                </label>
                 <input
+                  id="auth-reg-name"
                   type="text"
                   required
                   value={fullName}
@@ -378,8 +611,11 @@ export function HouseholdAuthModal({
                 />
               </div>
               <div>
-                <label className="mb-1 block font-medium text-[#141413]">Email</label>
+                <label htmlFor="auth-reg-email" className="mb-1 block font-medium text-[#141413]">
+                  Email
+                </label>
                 <input
+                  id="auth-reg-email"
                   type="email"
                   required
                   value={email}
@@ -389,10 +625,11 @@ export function HouseholdAuthModal({
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="mb-1 block font-medium text-[#141413]">
+                  <label htmlFor="auth-reg-password" className="mb-1 block font-medium text-[#141413]">
                     Password (8+ chars)
                   </label>
                   <input
+                    id="auth-reg-password"
                     type="password"
                     minLength={8}
                     required
@@ -402,10 +639,11 @@ export function HouseholdAuthModal({
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block font-medium text-[#141413]">
+                  <label htmlFor="auth-reg-currency" className="mb-1 block font-medium text-[#141413]">
                     Default Currency
                   </label>
                   <select
+                    id="auth-reg-currency"
                     value={currency}
                     onChange={(e) => setCurrency(e.target.value as 'PKR' | 'USD')}
                     className="h-10 w-full rounded border border-[#E6E4DD] bg-[#FFFFFF] px-3 text-sm"

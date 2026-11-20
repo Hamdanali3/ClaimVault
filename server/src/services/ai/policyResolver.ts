@@ -40,6 +40,28 @@ export function addMonthsUTC(date: Date, months: number): Date {
   );
 }
 
+export function computeNextUpcomingRenewalDate(
+  purchaseDate: Date,
+  billingCycle: BillingCycle,
+  now = new Date(),
+): { nextRenewalDate: Date | null; cancelByDate: Date | null } {
+  if (billingCycle === 'NONE') {
+    return { nextRenewalDate: null, cancelByDate: null };
+  }
+  const stepMonths = billingCycle === 'YEARLY' ? 12 : 1;
+  const cancelLeadDays = billingCycle === 'YEARLY' ? 3 : 2;
+  let candidate = addMonthsUTC(purchaseDate, stepMonths);
+  let guard = 0;
+  while (candidate.getTime() <= now.getTime() && guard < 120) {
+    candidate = addMonthsUTC(candidate, stepMonths);
+    guard += 1;
+  }
+  return {
+    nextRenewalDate: candidate,
+    cancelByDate: addDaysUTC(candidate, -cancelLeadDays),
+  };
+}
+
 export function resolvePolicyAndDates(params: {
   extraction: ExtractionResult;
   merchantProfile: IMerchantProfile | null;
@@ -119,15 +141,10 @@ export function resolvePolicyAndDates(params: {
   const warrantyExpiryDate =
     warrantyMonths > 0 ? addMonthsUTC(validPurchaseDate, warrantyMonths) : null;
 
-  let nextRenewalDate: Date | null = null;
-  let cancelByDate: Date | null = null;
-  if (billingCycle === 'MONTHLY') {
-    nextRenewalDate = addMonthsUTC(validPurchaseDate, 1);
-    cancelByDate = addDaysUTC(nextRenewalDate, -2);
-  } else if (billingCycle === 'YEARLY') {
-    nextRenewalDate = addMonthsUTC(validPurchaseDate, 12);
-    cancelByDate = addDaysUTC(nextRenewalDate, -3);
-  }
+  const { nextRenewalDate, cancelByDate } = computeNextUpcomingRenewalDate(
+    validPurchaseDate,
+    billingCycle,
+  );
 
   return {
     policy: {

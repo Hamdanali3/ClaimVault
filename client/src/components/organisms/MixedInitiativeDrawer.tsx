@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Drawer } from 'vaul';
 import { Check, ShieldCheck, X, Trash2 } from 'lucide-react';
+import { toast } from 'sonner';
 import type {
   AlertChannel,
   BillingCycle,
@@ -15,7 +16,7 @@ interface MixedInitiativeDrawerProps {
   review: IngestExtractResponseDTO | null;
   onClose: () => void;
   onConfirm: (id: string, input: ConfirmVaultItemInput) => Promise<void>;
-  onDiscard: (id: string) => Promise<void>;
+  onDiscard: (id: string) => Promise<boolean>;
 }
 
 export function MixedInitiativeDrawer({
@@ -30,7 +31,7 @@ export function MixedInitiativeDrawer({
   const [title, setTitle] = useState('');
   const [merchantName, setMerchantName] = useState('');
   const [kind, setKind] = useState<VaultItemKind>('PHYSICAL_ASSET');
-  const [amount, setAmount] = useState(0);
+  const [amountInput, setAmountInput] = useState('0');
   const [currency, setCurrency] = useState('PKR');
   const [purchaseDateISO, setPurchaseDateISO] = useState('');
   const [returnWindowDays, setReturnWindowDays] = useState(14);
@@ -47,7 +48,7 @@ export function MixedInitiativeDrawer({
     setTitle(item.title);
     setMerchantName(item.merchantName);
     setKind(item.kind);
-    setAmount(item.financials.amount);
+    setAmountInput(String(item.financials.amount));
     setCurrency(item.financials.currency);
     setPurchaseDateISO(item.dates.purchaseDate.slice(0, 10));
     setReturnWindowDays(item.returnWindowDays ?? 14);
@@ -90,23 +91,33 @@ export function MixedInitiativeDrawer({
 
   const handleConfirm = async (e: React.FormEvent) => {
     e.preventDefault();
+    const parsedAmount = Number.parseFloat(amountInput);
+    if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
+      toast.error('Please enter a valid purchase amount.');
+      return;
+    }
     setSaving(true);
     try {
       await onConfirm(item._id, {
-        title,
-        merchantName,
+        title: title.trim(),
+        merchantName: merchantName.trim(),
         kind,
-        amount: Number(amount),
+        amount: parsedAmount,
         currency,
         purchaseDateISO,
-        returnWindowDays: Number(returnWindowDays),
-        warrantyMonths: Number(warrantyMonths),
+        returnWindowDays: Math.max(0, Math.min(365, Number(returnWindowDays) || 0)),
+        warrantyMonths: Math.max(0, Math.min(240, Number(warrantyMonths) || 0)),
         billingCycle,
         orderNumber: orderNumber.trim() || null,
         serialNumber: serialNumber.trim() || null,
         alertChannels,
         rememberMerchantDefaults,
       });
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data
+          ?.error?.message ?? 'Could not save verified receipt. Please try again.';
+      toast.error(msg);
     } finally {
       setSaving(false);
     }
@@ -115,7 +126,11 @@ export function MixedInitiativeDrawer({
   const handleDiscard = async () => {
     setSaving(true);
     try {
-      await onDiscard(item._id);
+      const ok = await onDiscard(item._id);
+      if (!ok) {
+        toast.error('Could not discard entry from server.');
+        return;
+      }
       onClose();
     } finally {
       setSaving(false);
@@ -130,9 +145,7 @@ export function MixedInitiativeDrawer({
     <Drawer.Root open={Boolean(review)} onOpenChange={(o) => !o && onClose()} direction="right">
       <Drawer.Portal>
         <Drawer.Overlay className="fixed inset-0 z-40 bg-[#141413]/30" />
-        <Drawer.Content
-          className="fixed inset-y-0 right-0 z-50 flex w-full max-w-4xl flex-col border-l border-[#E6E4DD] bg-[#FAF9F6] shadow-xl outline-none"
-        >
+        <Drawer.Content className="fixed inset-y-0 right-0 z-50 flex w-full max-w-4xl flex-col border-l border-[#E6E4DD] bg-[#FAF9F6] shadow-xl outline-none">
           <div className="flex items-center justify-between border-b border-[#E6E4DD] bg-[#FFFFFF] px-5 py-3.5">
             <div>
               <Drawer.Title className="text-base font-semibold text-[#141413]">
@@ -149,6 +162,7 @@ export function MixedInitiativeDrawer({
             <button
               type="button"
               onClick={onClose}
+              aria-label="Close receipt verification drawer"
               className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-[#E6E4DD] bg-[#FAF9F6] text-[#615F59] hover:text-[#141413]"
             >
               <X className="h-4 w-4" />
@@ -188,12 +202,16 @@ export function MixedInitiativeDrawer({
                   className="rounded-md border border-[#E6E4DD] bg-[#FFFFFF] p-3"
                 >
                   <div className="mb-1 flex items-center justify-between">
-                    <label className="text-[11px] font-medium uppercase text-[#615F59]">
+                    <label
+                      htmlFor="review-merchant-input"
+                      className="text-[11px] font-medium uppercase text-[#615F59]"
+                    >
                       Merchant
                     </label>
                     <ConfidencePill score={conf.merchantName ?? 0.95} />
                   </div>
                   <input
+                    id="review-merchant-input"
                     type="text"
                     required
                     value={merchantName}
@@ -212,12 +230,16 @@ export function MixedInitiativeDrawer({
                   }`}
                 >
                   <div className="mb-1 flex items-center justify-between">
-                    <label className="text-[11px] font-medium uppercase text-[#615F59]">
+                    <label
+                      htmlFor="review-date-input"
+                      className="text-[11px] font-medium uppercase text-[#615F59]"
+                    >
                       Purchase Date
                     </label>
                     <ConfidencePill score={conf.purchaseDateISO ?? 0.95} />
                   </div>
                   <input
+                    id="review-date-input"
                     type="date"
                     required
                     autoFocus={isDateLow}
@@ -257,12 +279,16 @@ export function MixedInitiativeDrawer({
                 className="rounded-md border border-[#E6E4DD] bg-[#FFFFFF] p-3"
               >
                 <div className="mb-1 flex items-center justify-between">
-                  <label className="text-[11px] font-medium uppercase text-[#615F59]">
+                  <label
+                    htmlFor="review-title-input"
+                    className="text-[11px] font-medium uppercase text-[#615F59]"
+                  >
                     Item / Plan Description
                   </label>
                   <ConfidencePill score={conf.title ?? 0.95} />
                 </div>
                 <input
+                  id="review-title-input"
                   type="text"
                   required
                   value={title}
@@ -282,27 +308,35 @@ export function MixedInitiativeDrawer({
                   }`}
                 >
                   <div className="mb-1 flex items-center justify-between">
-                    <label className="text-[11px] font-medium uppercase text-[#615F59]">
+                    <label
+                      htmlFor="review-amount-input"
+                      className="text-[11px] font-medium uppercase text-[#615F59]"
+                    >
                       Amount
                     </label>
                     <ConfidencePill score={conf.purchasePrice ?? 0.95} />
                   </div>
                   <input
+                    id="review-amount-input"
                     type="number"
                     min="0"
                     step="any"
                     required
-                    value={amount}
-                    onChange={(e) => setAmount(Number(e.target.value))}
+                    value={amountInput}
+                    onChange={(e) => setAmountInput(e.target.value)}
                     className="w-full bg-transparent text-sm font-semibold text-[#141413] focus:outline-none tabular-ledger"
                   />
                 </div>
 
                 <div className="rounded-md border border-[#E6E4DD] bg-[#FFFFFF] p-3">
-                  <label className="mb-1 block text-[11px] font-medium uppercase text-[#615F59]">
+                  <label
+                    htmlFor="review-currency-select"
+                    className="mb-1 block text-[11px] font-medium uppercase text-[#615F59]"
+                  >
                     Currency
                   </label>
                   <select
+                    id="review-currency-select"
                     value={currency}
                     onChange={(e) => setCurrency(e.target.value)}
                     className="w-full bg-transparent text-sm font-medium text-[#141413] focus:outline-none tabular-ledger"
@@ -316,10 +350,14 @@ export function MixedInitiativeDrawer({
                 </div>
 
                 <div className="rounded-md border border-[#E6E4DD] bg-[#FFFFFF] p-3">
-                  <label className="mb-1 block text-[11px] font-medium uppercase text-[#615F59]">
+                  <label
+                    htmlFor="review-kind-select"
+                    className="mb-1 block text-[11px] font-medium uppercase text-[#615F59]"
+                  >
                     Ledger Type
                   </label>
                   <select
+                    id="review-kind-select"
                     value={kind}
                     onChange={(e) => setKind(e.target.value as VaultItemKind)}
                     className="w-full bg-transparent text-sm font-medium text-[#141413] focus:outline-none"
@@ -331,21 +369,26 @@ export function MixedInitiativeDrawer({
                 </div>
               </div>
 
-              {/* Policy Terms (1-tap chips + numeric controls) */}
+              {/* Policy Terms (1-tap chips + custom numeric controls) */}
               <div className="rounded-md border border-[#E6E4DD] bg-[#FFFFFF] p-3">
                 <div className="mb-2 text-[11px] font-medium uppercase text-[#615F59]">
                   Return Window, Warranty & Renewal Terms
                 </div>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div>
-                    <label className="text-xs text-[#615F59]">Return Window (Days)</label>
-                    <div className="mt-1 flex items-center gap-1.5">
+                    <label
+                      htmlFor="review-return-days"
+                      className="text-xs text-[#615F59]"
+                    >
+                      Return Window (Days)
+                    </label>
+                    <div className="mt-1 flex flex-wrap items-center gap-1">
                       {[0, 7, 14, 30].map((d) => (
                         <button
                           key={d}
                           type="button"
                           onClick={() => setReturnWindowDays(d)}
-                          className={`min-h-[32px] rounded border px-2 text-xs tabular-ledger ${
+                          className={`min-h-[30px] rounded border px-1.5 text-xs tabular-ledger ${
                             returnWindowDays === d
                               ? 'border-[#141413] bg-[#141413] text-[#FAF9F6]'
                               : 'border-[#E6E4DD] bg-[#FAF9F6] text-[#141413]'
@@ -354,18 +397,35 @@ export function MixedInitiativeDrawer({
                           {d}d
                         </button>
                       ))}
+                      <input
+                        id="review-return-days"
+                        type="number"
+                        min="0"
+                        max="365"
+                        value={returnWindowDays}
+                        onChange={(e) =>
+                          setReturnWindowDays(Math.max(0, Number.parseInt(e.target.value, 10) || 0))
+                        }
+                        aria-label="Custom return window days"
+                        className="h-[30px] w-14 rounded border border-[#E6E4DD] bg-[#FAF9F6] px-1.5 text-xs text-[#141413] tabular-ledger focus:border-[#141413] focus:outline-none"
+                      />
                     </div>
                   </div>
 
                   <div>
-                    <label className="text-xs text-[#615F59]">Warranty (Months)</label>
-                    <div className="mt-1 flex items-center gap-1.5">
+                    <label
+                      htmlFor="review-warranty-months"
+                      className="text-xs text-[#615F59]"
+                    >
+                      Warranty (Months)
+                    </label>
+                    <div className="mt-1 flex flex-wrap items-center gap-1">
                       {[0, 12, 18, 24].map((m) => (
                         <button
                           key={m}
                           type="button"
                           onClick={() => setWarrantyMonths(m)}
-                          className={`min-h-[32px] rounded border px-2 text-xs tabular-ledger ${
+                          className={`min-h-[30px] rounded border px-1.5 text-xs tabular-ledger ${
                             warrantyMonths === m
                               ? 'border-[#141413] bg-[#141413] text-[#FAF9F6]'
                               : 'border-[#E6E4DD] bg-[#FAF9F6] text-[#141413]'
@@ -374,12 +434,30 @@ export function MixedInitiativeDrawer({
                           {m}m
                         </button>
                       ))}
+                      <input
+                        id="review-warranty-months"
+                        type="number"
+                        min="0"
+                        max="240"
+                        value={warrantyMonths}
+                        onChange={(e) =>
+                          setWarrantyMonths(Math.max(0, Number.parseInt(e.target.value, 10) || 0))
+                        }
+                        aria-label="Custom warranty months"
+                        className="h-[30px] w-14 rounded border border-[#E6E4DD] bg-[#FAF9F6] px-1.5 text-xs text-[#141413] tabular-ledger focus:border-[#141413] focus:outline-none"
+                      />
                     </div>
                   </div>
 
                   <div>
-                    <label className="text-xs text-[#615F59]">Billing Cycle</label>
+                    <label
+                      htmlFor="review-billing-cycle"
+                      className="text-xs text-[#615F59]"
+                    >
+                      Billing Cycle
+                    </label>
                     <select
+                      id="review-billing-cycle"
                       value={billingCycle}
                       onChange={(e) => setBillingCycle(e.target.value as BillingCycle)}
                       className="mt-1 min-h-[32px] w-full rounded border border-[#E6E4DD] bg-[#FAF9F6] px-2 text-xs text-[#141413]"
@@ -398,10 +476,14 @@ export function MixedInitiativeDrawer({
                   onFocus={() => setActiveField('orderNumber')}
                   className="rounded-md border border-[#E6E4DD] bg-[#FFFFFF] p-3"
                 >
-                  <label className="mb-1 block text-[11px] font-medium uppercase text-[#615F59]">
+                  <label
+                    htmlFor="review-order-input"
+                    className="mb-1 block text-[11px] font-medium uppercase text-[#615F59]"
+                  >
                     Order / Invoice #
                   </label>
                   <input
+                    id="review-order-input"
                     type="text"
                     value={orderNumber}
                     onChange={(e) => setOrderNumber(e.target.value)}
@@ -415,10 +497,14 @@ export function MixedInitiativeDrawer({
                   onFocus={() => setActiveField('serialNumber')}
                   className="rounded-md border border-[#E6E4DD] bg-[#FFFFFF] p-3"
                 >
-                  <label className="mb-1 block text-[11px] font-medium uppercase text-[#615F59]">
+                  <label
+                    htmlFor="review-serial-input"
+                    className="mb-1 block text-[11px] font-medium uppercase text-[#615F59]"
+                  >
                     Serial Number (S/N)
                   </label>
                   <input
+                    id="review-serial-input"
                     type="text"
                     value={serialNumber}
                     onChange={(e) => setSerialNumber(e.target.value)}

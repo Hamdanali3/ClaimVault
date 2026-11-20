@@ -1,5 +1,14 @@
-import { useEffect, useState } from 'react';
-import { ShieldCheck, ArrowLeft, Lock } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  ShieldCheck,
+  ArrowLeft,
+  Lock,
+  Copy,
+  Check,
+  Printer,
+  RotateCcw,
+  AlertTriangle,
+} from 'lucide-react';
 import type { PublicCertificateDTO } from '@claimvault/shared';
 import { fetchPublicCertificate } from '../../services/api';
 import { formatMoney, formatShortDate } from '../../utils/formatters';
@@ -11,39 +20,117 @@ interface PublicVerifyPageProps {
 
 export function PublicVerifyPage({ token, onBackToVault }: PublicVerifyPageProps) {
   const [cert, setCert] = useState<PublicCertificateDTO | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [errorState, setErrorState] = useState<{
+    kind: 'NOT_FOUND' | 'SERVER_ERROR';
+    message: string;
+  } | null>(null);
+  const [copiedHash, setCopiedHash] = useState(false);
+
+  const loadCertificate = useCallback(() => {
+    setLoading(true);
+    setErrorState(null);
+    fetchPublicCertificate(token)
+      .then((data) => {
+        setCert(data);
+        setLoading(false);
+      })
+      .catch((err: unknown) => {
+        const status = (err as { response?: { status?: number } })?.response?.status;
+        if (status === 404 || status === 400) {
+          setErrorState({
+            kind: 'NOT_FOUND',
+            message: 'Certificate not found, revoked, or verification link expired.',
+          });
+        } else {
+          setErrorState({
+            kind: 'SERVER_ERROR',
+            message:
+              'Verification service is temporarily unavailable. Check database connectivity and try again.',
+          });
+        }
+        setLoading(false);
+      });
+  }, [token]);
 
   useEffect(() => {
-    fetchPublicCertificate(token)
-      .then(setCert)
-      .catch(() => setError('Certificate not found or link expired.'));
-  }, [token]);
+    loadCertificate();
+  }, [loadCertificate]);
+
+  const copySha256 = async () => {
+    if (!cert?.proofIntegrity.sha256Hash) return;
+    await navigator.clipboard.writeText(cert.proofIntegrity.sha256Hash);
+    setCopiedHash(true);
+    setTimeout(() => setCopiedHash(false), 1800);
+  };
 
   return (
     <div className="min-h-screen bg-[#FAF9F6] px-4 py-10">
       <div className="mx-auto max-w-xl">
-        <button
-          type="button"
-          onClick={onBackToVault}
-          className="mb-6 inline-flex items-center gap-1.5 text-xs font-medium text-[#615F59] hover:text-[#141413]"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-          <span>Back to ClaimVault Ledger</span>
-        </button>
+        <div className="mb-6 flex items-center justify-between gap-3 print:hidden">
+          <button
+            type="button"
+            onClick={onBackToVault}
+            className="inline-flex min-h-[36px] items-center gap-1.5 text-xs font-medium text-[#615F59] hover:text-[#141413]"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            <span>Back to ClaimVault Ledger</span>
+          </button>
 
-        {error ? (
-          <div className="rounded-lg border border-[#FECACA] bg-[#FEF2F2] p-6 text-sm text-[#991B1B]">
-            {error}
+          {cert && (
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="inline-flex min-h-[36px] items-center gap-1.5 rounded-md border border-[#E6E4DD] bg-[#FFFFFF] px-3 text-xs font-medium text-[#141413] hover:bg-[#F3F1EC]"
+            >
+              <Printer className="h-3.5 w-3.5" />
+              <span>Print Certificate</span>
+            </button>
+          )}
+        </div>
+
+        {errorState ? (
+          <div
+            role="alert"
+            className={`rounded-lg border p-6 text-sm ${
+              errorState.kind === 'SERVER_ERROR'
+                ? 'border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]'
+                : 'border-[#FECACA] bg-[#FEF2F2] text-[#991B1B]'
+            }`}
+          >
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div className="space-y-3">
+                <div>
+                  <div className="font-semibold">
+                    {errorState.kind === 'SERVER_ERROR'
+                      ? 'Verification Service Unavailable'
+                      : 'Certificate Not Found'}
+                  </div>
+                  <p className="mt-0.5 text-xs opacity-90">{errorState.message}</p>
+                </div>
+                {errorState.kind === 'SERVER_ERROR' && (
+                  <button
+                    type="button"
+                    onClick={loadCertificate}
+                    className="inline-flex min-h-[36px] items-center gap-1.5 rounded-md border border-[#92400E] bg-[#FFFFFF] px-3 text-xs font-semibold text-[#92400E] hover:bg-[#FEF3C7]"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    <span>Retry Verification</span>
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
-        ) : !cert ? (
+        ) : loading || !cert ? (
           <div className="rounded-lg border border-[#E6E4DD] bg-[#FFFFFF] p-6 text-xs text-[#615F59]">
             Verifying cryptographic proof certificate...
           </div>
         ) : (
           <div className="overflow-hidden rounded-lg border border-[#E6E4DD] bg-[#FFFFFF]">
-            <div className="flex items-center justify-between border-b border-[#A7F3D0] bg-[#ECFDF5] px-5 py-4 text-[#065F46]">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#A7F3D0] bg-[#ECFDF5] px-5 py-4 text-[#065F46]">
               <div className="flex items-center gap-2">
-                <ShieldCheck className="h-5 w-5" />
+                <ShieldCheck className="h-5 w-5 shrink-0" />
                 <div>
                   <div className="text-xs font-bold uppercase tracking-wider">
                     Verified Resale Trust Certificate
@@ -108,9 +195,21 @@ export function PublicVerifyPage({ token, onBackToVault }: PublicVerifyPageProps
               </div>
 
               <div className="rounded-md border border-[#E6E4DD] bg-[#F3F1EC] p-3 text-xs">
-                <div className="mb-1 flex items-center gap-1.5 font-semibold text-[#141413]">
-                  <Lock className="h-3.5 w-3.5 text-[#065F46]" />
-                  <span>Cryptographic SHA-256 Receipt Proof</span>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 font-semibold text-[#141413]">
+                    <Lock className="h-3.5 w-3.5 text-[#065F46]" />
+                    <span>Cryptographic SHA-256 Receipt Proof</span>
+                  </div>
+                  {cert.proofIntegrity.sha256Hash && (
+                    <button
+                      type="button"
+                      onClick={() => void copySha256()}
+                      className="inline-flex items-center gap-1 rounded border border-[#E6E4DD] bg-[#FFFFFF] px-2 py-0.5 text-[11px] font-medium text-[#141413] hover:bg-[#FAF9F6] print:hidden"
+                    >
+                      {copiedHash ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                      <span>{copiedHash ? 'Copied' : 'Copy Hash'}</span>
+                    </button>
+                  )}
                 </div>
                 <div className="break-all text-[11px] text-[#615F59] tabular-ledger">
                   {cert.proofIntegrity.sha256Hash ?? 'No file digest'}

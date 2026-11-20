@@ -10,6 +10,7 @@ interface GlobalDropzoneProps {
   onTrySampleReceipt: () => void;
   ingestionStage: IngestionStage;
   isIngesting: boolean;
+  aiMode?: 'gemini-vision' | 'openai-vision' | 'local-hybrid';
   inputTriggerRef?: React.RefObject<HTMLButtonElement | null>;
 }
 
@@ -19,6 +20,7 @@ export function GlobalDropzone({
   onTrySampleReceipt,
   ingestionStage,
   isIngesting,
+  aiMode = 'local-hybrid',
   inputTriggerRef,
 }: GlobalDropzoneProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -59,7 +61,11 @@ export function GlobalDropzone({
           <p className="text-xs text-[#615F59]">
             {isIngesting
               ? 'Reading store name, serial number, and return dates...'
-              : 'Receipts are SHA-256 hashed and matched against your Merchant Memory in under 5ms.'}
+              : aiMode === 'gemini-vision'
+                ? 'Receipts are SHA-256 hashed, parsed via Gemini Vision, and matched against Merchant Memory in under 5ms.'
+                : aiMode === 'openai-vision'
+                  ? 'Receipts are SHA-256 hashed, parsed via OpenAI Vision, and matched against Merchant Memory in under 5ms.'
+                  : 'Receipts are SHA-256 hashed and matched against your Merchant Memory in under 5ms.'}
           </p>
         </div>
 

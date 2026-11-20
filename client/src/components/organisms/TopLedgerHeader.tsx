@@ -78,6 +78,32 @@ export function TopLedgerHeader({
               {dashboard?.household.name ?? 'Personal Proof Ledger'}
             </span>
 
+            {dashboard?.systemStatus && !isOfflineFallback && (
+              <button
+                type="button"
+                onClick={onOpenAuthModal}
+                title="View connected database, queue, and AI pipeline status"
+                className="hidden items-center gap-1.5 rounded border border-[#A7F3D0] bg-[#ECFDF5] px-2 py-0.5 text-[11px] font-medium text-[#065F46] hover:bg-[#D1FAE5] lg:inline-flex"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-[#065F46]" />
+                <span className="tabular-ledger">
+                  {dashboard.systemStatus.databaseMode === 'atlas' ? 'Atlas' : 'Local DB'}
+                  {' · '}
+                  {dashboard.systemStatus.queueMode === 'bullmq-redis'
+                    ? 'BullMQ Redis'
+                    : dashboard.systemStatus.queueMode === 'vercel-cron'
+                      ? 'Vercel Cron'
+                      : 'Cron'}
+                  {' · '}
+                  {dashboard.systemStatus.aiMode === 'gemini-vision'
+                    ? 'Gemini Vision'
+                    : dashboard.systemStatus.aiMode === 'openai-vision'
+                      ? 'OpenAI Vision'
+                      : 'Local OCR'}
+                </span>
+              </button>
+            )}
+
             {isOfflineFallback && (
               <span className="inline-flex items-center gap-1 rounded border border-[#FDE68A] bg-[#FFFBEB] px-2 py-0.5 text-[11px] font-medium text-[#92400E]">
                 <WifiOff className="h-3 w-3" />

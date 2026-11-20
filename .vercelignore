@@ -1,0 +1,12 @@
+node_modules
+.git
+.env
+.env.local
+.env.*.local
+server/.mongodb-local
+server/uploads
+server/tests
+*.docx
+*.pdf
+implementationplan.md
+*.log

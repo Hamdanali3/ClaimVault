@@ -1,0 +1,23 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "fluid": true,
+  "buildCommand": "npm run build",
+  "outputDirectory": "client/dist",
+  "functions": {
+    "api/index.mjs": {
+      "maxDuration": 60,
+      "excludeFiles": "**/node_modules/{mongodb-memory-server,mongodb-memory-server-core}/**"
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/v1/cron/deadline-sweep",
+      "schedule": "0 8 * * *"
+    }
+  ],
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index" },
+    { "source": "/uploads/(.*)", "destination": "/api/index" },
+    { "source": "/((?!api/|uploads/).*)", "destination": "/index.html" }
+  ]
+}

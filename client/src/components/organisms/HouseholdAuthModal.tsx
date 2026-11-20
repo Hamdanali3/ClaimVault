@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { X, Copy, Check, LogOut, Users } from 'lucide-react';
 import { toast } from 'sonner';
+import type { SystemStatusDTO } from '@claimvault/shared';
 import {
   fetchHouseholdMembers,
   inviteHouseholdMemberApi,
@@ -14,6 +15,7 @@ interface HouseholdAuthModalProps {
   open: boolean;
   onClose: () => void;
   sessionUser: AuthSessionUser | null;
+  systemStatus?: SystemStatusDTO;
   onAuthChanged: () => Promise<void>;
 }
 
@@ -21,9 +23,10 @@ export function HouseholdAuthModal({
   open,
   onClose,
   sessionUser,
+  systemStatus,
   onAuthChanged,
 }: HouseholdAuthModalProps) {
-  const [mode, setMode] = useState<'HOUSEHOLD' | 'LOGIN' | 'REGISTER'>('HOUSEHOLD');
+  const [mode, setMode] = useState<'HOUSEHOLD' | 'STACK' | 'LOGIN' | 'REGISTER'>('HOUSEHOLD');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
@@ -153,8 +156,8 @@ export function HouseholdAuthModal({
           </button>
         </div>
 
-        <div className="flex gap-2 border-b border-[#E6E4DD] bg-[#FFFFFF] px-5 py-2 text-xs">
-          {(['HOUSEHOLD', 'LOGIN', 'REGISTER'] as const).map((tab) => (
+        <div className="flex flex-wrap gap-1.5 border-b border-[#E6E4DD] bg-[#FFFFFF] px-5 py-2 text-xs">
+          {(['HOUSEHOLD', 'STACK', 'LOGIN', 'REGISTER'] as const).map((tab) => (
             <button
               key={tab}
               type="button"
@@ -167,9 +170,11 @@ export function HouseholdAuthModal({
             >
               {tab === 'HOUSEHOLD'
                 ? 'Shared Household'
-                : tab === 'LOGIN'
-                  ? 'Sign In'
-                  : 'Create Account'}
+                : tab === 'STACK'
+                  ? 'Connected Stack'
+                  : tab === 'LOGIN'
+                    ? 'Sign In'
+                    : 'Create Account'}
             </button>
           ))}
         </div>
@@ -254,6 +259,77 @@ export function HouseholdAuthModal({
                   <span>Sign Out to Demo Workspace</span>
                 </button>
               )}
+            </div>
+          )}
+
+          {mode === 'STACK' && (
+            <div className="space-y-2.5 text-xs">
+              {[
+                {
+                  name: 'Database Ledger',
+                  detail: 'Stores users, households, merchant memory, vault items & audit logs',
+                  status:
+                    systemStatus?.databaseMode === 'atlas'
+                      ? 'MongoDB Atlas Connected'
+                      : 'Embedded Local MongoDB',
+                  ok: systemStatus?.databaseMode === 'atlas',
+                },
+                {
+                  name: 'Deadline Queue Worker',
+                  detail: 'Schedules T-7d, T-48h, and T-12h reminder sweeps via BullMQ or Vercel Cron',
+                  status:
+                    systemStatus?.queueMode === 'bullmq-redis'
+                      ? 'BullMQ · Redis Cloud Connected'
+                      : systemStatus?.queueMode === 'vercel-cron'
+                        ? 'Vercel Cron Sweeper Active'
+                        : 'In-Process Cron Fallback',
+                  ok:
+                    systemStatus?.queueMode === 'bullmq-redis' ||
+                    systemStatus?.queueMode === 'vercel-cron',
+                },
+                {
+                  name: 'Multimodal Receipt AI',
+                  detail: 'Extracts items, dates, serials, confidence & bounding boxes',
+                  status:
+                    systemStatus?.aiMode === 'gemini-vision'
+                      ? 'Gemini Flash Vision Active'
+                      : systemStatus?.aiMode === 'openai-vision'
+                        ? 'OpenAI Vision Active'
+                        : 'Local Tesseract / Regex Fallback',
+                  ok: systemStatus?.aiMode !== 'local-hybrid',
+                },
+                {
+                  name: 'Proof Storage & Alerts',
+                  detail: 'WebP/PDF SHA-256 archive and optional outbound webhooks',
+                  status: `${
+                    systemStatus?.storageDriver === 's3'
+                      ? 'S3'
+                      : systemStatus?.storageDriver === 'mongodb'
+                        ? 'MongoDB Atlas'
+                        : 'Local Disk'
+                  } · WhatsApp ${systemStatus?.webhooks.whatsappConfigured ? 'On' : 'Off'}`,
+                  ok: true,
+                },
+              ].map((row) => (
+                <div
+                  key={row.name}
+                  className="flex items-center justify-between gap-3 rounded-md border border-[#E6E4DD] bg-[#FFFFFF] p-3"
+                >
+                  <div>
+                    <div className="font-semibold text-[#141413]">{row.name}</div>
+                    <div className="text-[11px] text-[#615F59]">{row.detail}</div>
+                  </div>
+                  <span
+                    className={`shrink-0 rounded border px-2 py-0.5 text-[11px] font-medium tabular-ledger ${
+                      row.ok
+                        ? 'border-[#A7F3D0] bg-[#ECFDF5] text-[#065F46]'
+                        : 'border-[#E6E4DD] bg-[#F3F1EC] text-[#615F59]'
+                    }`}
+                  >
+                    {row.status}
+                  </span>
+                </div>
+              ))}
             </div>
           )}
 

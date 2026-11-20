@@ -41,6 +41,9 @@ export function errorHandler(
 
   const message = err instanceof Error ? err.message : 'Internal server error';
   const status = (err as { status?: number })?.status ?? 500;
+  if (status >= 500) {
+    console.error('[ClaimVault API Error]', err);
+  }
   res.status(status).json({
     error: {
       code: status >= 500 ? 'INTERNAL_ERROR' : 'REQUEST_ERROR',

@@ -1,8 +1,7 @@
 import PDFDocument from 'pdfkit';
-import fs from 'node:fs/promises';
 import sharp from 'sharp';
 import type { IVaultItem } from '../../models/VaultItem.js';
-import { resolveProofFilePath } from '../../config/storage.js';
+import { readProofBuffer } from '../../config/storage.js';
 import { env } from '../../config/env.js';
 
 function fmtDate(d: Date | null | undefined): string {
@@ -23,20 +22,17 @@ export async function buildClaimDossierPdf(
 ): Promise<Buffer> {
   let embeddedPng: Buffer | null = null;
   const primaryProof = item.proofFiles?.[0];
-  if (primaryProof?.fileUrl) {
-    const absPath = resolveProofFilePath(primaryProof.fileUrl);
-    if (absPath) {
-      try {
-        const rawBuf = await fs.readFile(absPath);
-        if (!primaryProof.mimeType.includes('pdf')) {
-          embeddedPng = await sharp(rawBuf)
-            .resize({ width: 900, height: 1100, fit: 'inside', withoutEnlargement: true })
-            .png()
-            .toBuffer();
-        }
-      } catch {
-        embeddedPng = null;
+  if (primaryProof?.fileUrl && !primaryProof.mimeType.includes('pdf')) {
+    try {
+      const proofData = await readProofBuffer(primaryProof.fileUrl);
+      if (proofData && !proofData.mimeType.includes('pdf')) {
+        embeddedPng = await sharp(proofData.buffer)
+          .resize({ width: 900, height: 1100, fit: 'inside', withoutEnlargement: true })
+          .png()
+          .toBuffer();
       }
+    } catch {
+      embeddedPng = null;
     }
   }
 

@@ -1,3 +1,4 @@
+import os from 'node:os';
 import {
   BUILTIN_MERCHANT_RULES,
   ExtractionResultSchema,
@@ -76,7 +77,10 @@ function sanitizeBoundingBox(box: unknown): BoundingBox | null {
   return clamped;
 }
 
-function sanitizeExtraction(raw: Record<string, unknown>): ExtractionResult {
+function sanitizeExtraction(
+  raw: Record<string, unknown>,
+  fallbackDateISO = new Date().toISOString().slice(0, 10),
+): ExtractionResult {
   const rawBoxes = (raw.boundingBoxes as Record<string, unknown> | undefined) ?? {};
   const cleanBoxes: Record<string, BoundingBox> = {};
   for (const [k, v] of Object.entries(rawBoxes)) {
@@ -93,26 +97,61 @@ function sanitizeExtraction(raw: Record<string, unknown>): ExtractionResult {
     }
   }
 
+  const rawIdentifiers = (raw.identifiers as Record<string, unknown> | undefined) ?? {};
+  const dateStr =
+    typeof raw.purchaseDateISO === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.purchaseDateISO)
+      ? raw.purchaseDateISO
+      : fallbackDateISO;
+
   return ExtractionResultSchema.parse({
-    ...raw,
+    kind: raw.kind ?? 'PHYSICAL_ASSET',
+    merchantName: String(raw.merchantName || 'Local Merchant').trim(),
+    title: String(raw.title || 'Purchased Item').trim(),
+    category: String(raw.category || 'Electronics').trim(),
+    purchasePrice: Math.max(0, Number(raw.purchasePrice) || 0),
+    currency: String(raw.currency || 'PKR').toUpperCase().slice(0, 5),
+    purchaseDateISO: dateStr,
+    identifiers: {
+      orderNumber: rawIdentifiers.orderNumber ? String(rawIdentifiers.orderNumber) : null,
+      serialNumber: rawIdentifiers.serialNumber ? String(rawIdentifiers.serialNumber) : null,
+      imei: rawIdentifiers.imei ? String(rawIdentifiers.imei) : null,
+      modelCode: rawIdentifiers.modelCode ? String(rawIdentifiers.modelCode) : null,
+    },
+    explicitReturnDaysOnReceipt:
+      typeof raw.explicitReturnDaysOnReceipt === 'number'
+        ? Math.max(0, Math.round(raw.explicitReturnDaysOnReceipt))
+        : null,
+    explicitWarrantyMonthsOnReceipt:
+      typeof raw.explicitWarrantyMonthsOnReceipt === 'number'
+        ? Math.max(0, Math.round(raw.explicitWarrantyMonthsOnReceipt))
+        : null,
+    billingCycle: raw.billingCycle ?? 'NONE',
     fieldConfidence: cleanConf,
     boundingBoxes: cleanBoxes,
   });
 }
 
+const GEMINI_MODEL_CANDIDATES = [
+  'gemini-flash-latest',
+  'gemini-3-flash-preview',
+];
+
+let openAiCooldownUntil = 0;
+
 async function callGeminiStructuredExtraction(params: {
   text: string;
   imageBuffer: Buffer | null;
   todayISO: string;
-}): Promise<ExtractionResult | null> {
+}): Promise<{ extraction: ExtractionResult; modelUsed: string } | null> {
   if (!env.GEMINI_API_KEY) return null;
 
+  const hasText = params.text.trim().length >= 20;
   const parts: Array<Record<string, unknown>> = [
     {
       text: [
         `You are a deterministic receipt and invoice parser. Today's date is ${params.todayISO}.`,
         'Extract merchantName, concise product/plan title, category, purchasePrice (numeric), currency (ISO 3-letter e.g. PKR or USD), purchaseDateISO (YYYY-MM-DD), identifiers (orderNumber, serialNumber, imei, modelCode), explicitReturnDaysOnReceipt, explicitWarrantyMonthsOnReceipt, billingCycle, per-field confidence (0.0-1.0), and normalized [x1,y1,x2,y2] bounding boxes in [0,1].',
-        'If thermal ink looks smudged or a date/price is ambiguous, reflect lower confidence (<0.85) on that specific field.',
+        'If thermal ink looks smudged or a date/price is ambiguous (for instance "??/11/2026" or "[faded]"), set purchaseDateISO confidence < 0.70.',
         params.text ? `Receipt / Order Text:\n${params.text}` : '',
       ]
         .filter(Boolean)
@@ -120,7 +159,8 @@ async function callGeminiStructuredExtraction(params: {
     },
   ];
 
-  if (params.imageBuffer) {
+  // Only send image bytes when there is no clean extracted text (real camera/scan uploads)
+  if (!hasText && params.imageBuffer) {
     parts.push({
       inlineData: {
         mimeType: 'image/png',
@@ -129,31 +169,53 @@ async function callGeminiStructuredExtraction(params: {
     });
   }
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts }],
-        generationConfig: {
-          temperature: 0.0,
-          responseMimeType: 'application/json',
-          responseSchema: GEMINI_JSON_SCHEMA,
-        },
-      }),
-      signal: AbortSignal.timeout(15000),
-    },
-  );
+  const deadlineAt = Date.now() + 8000;
 
-  if (!res.ok) return null;
-  const json = (await res.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
-  const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) return null;
-  const parsed = JSON.parse(rawText) as Record<string, unknown>;
-  return sanitizeExtraction(parsed);
+  for (const model of GEMINI_MODEL_CANDIDATES) {
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs < 1500) break;
+
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts }],
+            generationConfig: {
+              temperature: 0.0,
+              responseMimeType: 'application/json',
+              responseSchema: GEMINI_JSON_SCHEMA,
+            },
+          }),
+          signal: AbortSignal.timeout(Math.min(5000, remainingMs)),
+        },
+      );
+
+      if (!res.ok) {
+        console.warn(`[AI Gemini] ${model} returned HTTP ${res.status}`);
+        continue;
+      }
+      const json = (await res.json()) as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      };
+      const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!rawText) continue;
+      const parsed = JSON.parse(rawText) as Record<string, unknown>;
+      return {
+        extraction: sanitizeExtraction(parsed, params.todayISO),
+        modelUsed: model,
+      };
+    } catch (err) {
+      console.warn(
+        `[AI Gemini] ${model} error:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
+  return null;
 }
 
 async function callOpenAIStructuredExtraction(params: {
@@ -161,15 +223,16 @@ async function callOpenAIStructuredExtraction(params: {
   imageBuffer: Buffer | null;
   todayISO: string;
 }): Promise<ExtractionResult | null> {
-  if (!env.OPENAI_API_KEY) return null;
+  if (!env.OPENAI_API_KEY || Date.now() < openAiCooldownUntil) return null;
 
+  const hasText = params.text.trim().length >= 20;
   const userContent: Array<Record<string, unknown>> = [
     {
       type: 'text',
       text: `Today is ${params.todayISO}. Parse this receipt/order into strict JSON with merchantName, title, kind (PHYSICAL_ASSET|SUBSCRIPTION|UTILITY_BILL), category, purchasePrice, currency, purchaseDateISO (YYYY-MM-DD), identifiers, explicitReturnDaysOnReceipt, explicitWarrantyMonthsOnReceipt, billingCycle (NONE|MONTHLY|YEARLY), fieldConfidence, and normalized [x1,y1,x2,y2] boundingBoxes.\n\n${params.text}`,
     },
   ];
-  if (params.imageBuffer) {
+  if (!hasText && params.imageBuffer) {
     userContent.push({
       type: 'image_url',
       image_url: {
@@ -196,22 +259,30 @@ async function callOpenAIStructuredExtraction(params: {
         { role: 'user', content: userContent },
       ],
     }),
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(6000),
   });
 
-  if (!res.ok) return null;
+  if (!res.ok) {
+    console.warn(`[AI OpenAI] gpt-4o-mini returned HTTP ${res.status}`);
+    if (res.status === 429 || res.status === 401) {
+      openAiCooldownUntil = Date.now() + 5 * 60 * 1000;
+    }
+    return null;
+  }
   const json = (await res.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
   };
   const content = json.choices?.[0]?.message?.content;
   if (!content) return null;
-  return sanitizeExtraction(JSON.parse(content) as Record<string, unknown>);
+  return sanitizeExtraction(JSON.parse(content) as Record<string, unknown>, params.todayISO);
 }
 
 async function runLocalTesseractOcr(imageBuffer: Buffer): Promise<string> {
   try {
     const { createWorker } = await import('tesseract.js');
-    const worker = await createWorker('eng');
+    const worker = await createWorker('eng', 1, {
+      cachePath: os.tmpdir(),
+    });
     try {
       const result = await worker.recognize(imageBuffer);
       return result.data.text ?? '';
@@ -523,7 +594,7 @@ export async function extractStructuredReceipt(params: {
   const todayISO = new Date().toISOString().slice(0, 10);
   let textToUse = params.extractedTextFromFile.trim();
 
-  // 1. Live Gemini 2.5 Flash if configured
+  // 1. Live Gemini Flash Vision if configured
   if (
     env.AI_PRIMARY_PROVIDER !== 'local' &&
     (env.AI_PRIMARY_PROVIDER === 'gemini' || env.AI_PRIMARY_PROVIDER === 'auto') &&
@@ -536,10 +607,22 @@ export async function extractStructuredReceipt(params: {
         todayISO,
       });
       if (geminiResult) {
+        const heuristicFallback = textToUse
+          ? runDeterministicExtraction(textToUse, todayISO, params.fileNameHint)
+          : null;
+        const mergedBoxes =
+          Object.keys(geminiResult.extraction.boundingBoxes).length > 0
+            ? geminiResult.extraction.boundingBoxes
+            : (heuristicFallback?.boundingBoxes ?? {});
         return {
-          extraction: geminiResult,
-          rawOcrText: textToUse || `${geminiResult.merchantName} - ${geminiResult.title}`,
-          engineUsed: 'gemini-2.5-flash-structured',
+          extraction: {
+            ...geminiResult.extraction,
+            boundingBoxes: mergedBoxes,
+          },
+          rawOcrText:
+            textToUse ||
+            `${geminiResult.extraction.merchantName} - ${geminiResult.extraction.title}`,
+          engineUsed: `${geminiResult.modelUsed}-structured`,
         };
       }
     } catch {

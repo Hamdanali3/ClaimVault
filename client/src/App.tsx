@@ -310,6 +310,7 @@ export function App() {
           onTrySampleReceipt={handleSimulateVisit1}
           ingestionStage={ingestionStage}
           isIngesting={isIngesting}
+          aiMode={dashboard?.systemStatus?.aiMode}
           inputTriggerRef={uploadBtnRef}
         />
 
@@ -395,6 +396,7 @@ export function App() {
         open={authModalOpen}
         onClose={() => setAuthModalOpen(false)}
         sessionUser={sessionUser}
+        systemStatus={dashboard?.systemStatus}
         onAuthChanged={loadDashboard}
       />
     </div>

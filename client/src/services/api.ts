@@ -32,7 +32,7 @@ export function setStoredTokens(accessToken: string | null, refreshToken: string
 
 export const api = axios.create({
   baseURL: '/api/v1',
-  timeout: 25000,
+  timeout: 35000,
 });
 
 api.interceptors.request.use((config) => {

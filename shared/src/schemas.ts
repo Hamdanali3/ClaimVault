@@ -186,6 +186,21 @@ export interface DashboardMetricsDTO {
   resolvedCount: number;
 }
 
+export interface SystemStatusDTO {
+  databaseMode: 'atlas' | 'memory-server';
+  queueMode: 'bullmq-redis' | 'in-process-cron' | 'vercel-cron';
+  aiMode: 'gemini-vision' | 'openai-vision' | 'local-hybrid';
+  aiProviders: {
+    geminiConfigured: boolean;
+    openaiConfigured: boolean;
+  };
+  storageDriver: 'local' | 'mongodb' | 's3';
+  webhooks: {
+    whatsappConfigured: boolean;
+    smtpConfigured: boolean;
+  };
+}
+
 export interface DashboardResponseDTO {
   urgentItems: VaultItemDTO[];
   allActiveItems: VaultItemDTO[];
@@ -200,6 +215,7 @@ export interface DashboardResponseDTO {
     defaultCurrency: string;
     memberCount: number;
   };
+  systemStatus?: SystemStatusDTO;
 }
 
 export interface IngestExtractResponseDTO {

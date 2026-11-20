@@ -12,6 +12,7 @@ import { HouseholdModel } from '../models/Household.js';
 import { AuditLogModel } from '../models/AuditLog.js';
 import { AppError } from '../middlewares/errorHandler.js';
 import { runWithOptionalTransaction } from '../config/db.js';
+import { getSystemStatus } from '../config/systemStatus.js';
 import { addDaysUTC, addMonthsUTC } from '../services/ai/policyResolver.js';
 import {
   cancelPendingRemindersForItem,
@@ -206,6 +207,7 @@ export async function getDashboard(
         defaultCurrency: household?.defaultCurrency ?? 'PKR',
         memberCount: household?.members.length ?? 1,
       },
+      systemStatus: getSystemStatus(),
     };
 
     res.json(payload);

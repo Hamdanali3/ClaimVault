@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.vercel
 .env
 .env.local
 server/.mongodb-local/
@@ -7,3 +8,6 @@ server/uploads/
 *.log
 *.tsbuildinfo
 .DS_Store
+
+.vercel
+.env*
